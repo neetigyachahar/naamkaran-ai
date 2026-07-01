@@ -13,7 +13,7 @@ interface SmartPickProgressProps {
 const STEPS: { phase: PickPhase; label: string }[] = [
   { phase: "considering", label: "Considering" },
   { phase: "domain", label: "Domain check" },
-  { phase: "seo", label: "Brand search" },
+  { phase: "seo", label: "Brand check (quick)" },
   { phase: "scoring", label: "Score" },
 ];
 

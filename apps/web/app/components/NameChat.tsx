@@ -8,6 +8,7 @@ import {
   type SmartPickState,
   streamSmartPick,
 } from "../lib/smart-pick";
+import { AnalyticsEvents, trackEvent } from "../lib/analytics";
 import { NameChip } from "./NameChip";
 import { SmartPickProgress } from "./SmartPickProgress";
 import { SmartPickToggle } from "./SmartPickToggle";
@@ -80,6 +81,10 @@ export function NameChat({ onNameSelect, activeName }: NameChatProps) {
 
     try {
       if (smartPick) {
+        trackEvent(AnalyticsEvents.SMART_PICK, {
+          genre_id: genreId,
+          has_context: Boolean(context.trim()),
+        });
         setTurns([
           ...nextTurns,
           {
@@ -116,6 +121,10 @@ export function NameChat({ onNameSelect, activeName }: NameChatProps) {
           apiKey ?? undefined,
         );
       } else {
+        trackEvent(AnalyticsEvents.NAME_GENERATE, {
+          genre_id: genreId,
+          has_context: Boolean(context.trim()),
+        });
         const response = await generateNames(
           {
             genreId,

@@ -2,6 +2,18 @@
 
 Turborepo monorepo for the name viability checker (`naamkaran-407d7`).
 
+**Live:** [naamkaran-ai.web.app](https://naamkaran-ai.web.app) · **Blog:** [I got tired of falling in love with product names that were already taken — so I built Naamkaran](https://dev.to/neetigyachahar/i-got-tired-of-falling-in-love-with-product-names-that-were-already-taken-so-i-built-naamkaran-3gmk)
+
+## Screenshots
+
+**Workspace** — generate names and run viability checks side by side.
+
+![Naamkaran workspace](assets/naamkaran-ai.png)
+
+**Smart pick** — generate and validate names in one flow.
+
+![Naamkaran Smart pick](assets/naamkaran-ai-smart-pick.png)
+
 ## Apps
 
 - `apps/web` — React Router (static SPA) hosted on Firebase Hosting

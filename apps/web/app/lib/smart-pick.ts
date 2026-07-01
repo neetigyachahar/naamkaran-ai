@@ -4,6 +4,7 @@ import {
   SMART_PICK_MIN_SCORE,
   SMART_PICK_REVEAL_COUNT,
 } from "@naamkaran/shared";
+import { reportAiPartialError, reportAiStreamError } from "./ai-client";
 
 export function getSmartPickStreamUrl(): string {
   const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
@@ -179,6 +180,13 @@ export async function streamSmartPick(
     body.apiKey = apiKey;
   }
 
+  const clientContext = {
+    modelId,
+    genreId: request.genreId,
+    hasByok: Boolean(apiKey),
+    smartPick: true,
+  };
+
   const response = await fetch(getSmartPickStreamUrl(), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -188,12 +196,15 @@ export async function streamSmartPick(
 
   if (!response.ok) {
     const text = await response.text();
+    reportAiStreamError("smart_pick", text || `Smart pick failed (${response.status})`, clientContext);
     throw new Error(text || `Smart pick failed (${response.status})`);
   }
 
   const reader = response.body?.getReader();
   if (!reader) {
-    throw new Error("No response stream from server");
+    const message = "No response stream from server";
+    reportAiStreamError("smart_pick", message, clientContext);
+    throw new Error(message);
   }
 
   const decoder = new TextDecoder();
@@ -211,6 +222,9 @@ export async function streamSmartPick(
       const line = part.trim();
       if (!line.startsWith("data: ")) continue;
       const event = JSON.parse(line.slice(6)) as SmartPickEvent;
+      if (event.type === "error") {
+        reportAiPartialError("smart_pick", event.message, clientContext);
+      }
       state = applyEvent(state, event);
       onUpdate(state);
     }

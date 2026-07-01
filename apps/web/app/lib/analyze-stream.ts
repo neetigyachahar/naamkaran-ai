@@ -6,6 +6,7 @@ import type {
   SeoResult,
 } from "@naamkaran/shared";
 import type { AnalyzeStreamEvent } from "@naamkaran/shared";
+import { reportAiPartialError, reportAiStreamError } from "./ai-client";
 
 export function getAnalyzeStreamUrl(): string {
   const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
@@ -92,6 +93,7 @@ export async function streamAnalyzeName(
   onProgress: (state: AnalyzeProgressState) => void,
   signal?: AbortSignal,
   apiKey?: string,
+  deepBrandSearch?: boolean,
 ): Promise<AnalyzeNameResponse> {
   let progress = INITIAL_ANALYZE_PROGRESS(request.name);
   onProgress(progress);
@@ -99,6 +101,9 @@ export async function streamAnalyzeName(
   const body: AnalyzeNameRequest = { ...request, model: modelId };
   if (apiKey) {
     body.apiKey = apiKey;
+    if (deepBrandSearch) {
+      body.deepBrandSearch = true;
+    }
   }
 
   const response = await fetch(getAnalyzeStreamUrl(), {
@@ -108,8 +113,16 @@ export async function streamAnalyzeName(
     signal,
   });
 
+  const clientContext = {
+    modelId,
+    hasByok: Boolean(apiKey),
+    deepBrandSearch: Boolean(apiKey && deepBrandSearch),
+    name: request.name,
+  };
+
   if (!response.ok) {
     const text = await response.text();
+    reportAiStreamError("analyze", text || `Analysis failed (${response.status})`, clientContext);
     throw new Error(text || `Analysis failed (${response.status})`);
   }
 
@@ -136,9 +149,11 @@ export async function streamAnalyzeName(
 
       const event = JSON.parse(line.slice(6)) as AnalyzeStreamEvent;
       if (event.type === "error") {
+        reportAiStreamError("analyze", event.message, clientContext);
         throw new Error(event.message);
       }
       if (event.type === "seo_error") {
+        reportAiPartialError("brand_search", event.message, clientContext);
         progress = applyEvent(progress, event);
         onProgress(progress);
         continue;
@@ -155,7 +170,9 @@ export async function streamAnalyzeName(
   }
 
   if (!result) {
-    throw new Error("Analysis finished without a result");
+    const message = "Analysis finished without a result";
+    reportAiStreamError("analyze", message, clientContext);
+    throw new Error(message);
   }
 
   return result;

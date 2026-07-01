@@ -2,7 +2,7 @@ import type { AnalyzeNameResponse, DomainCheckResult, GeminiModelId, SeoResult }
 import { resolveGeminiModelId } from "@naamkaran/shared";
 import { REGISTRATION_CHECK_ENABLED } from "./config/features";
 import { ACTIVE_SCORE_WEIGHTS } from "./config/tlds";
-import { analysisCacheKey } from "./lib/gemini";
+import { analysisCacheKey, type BrandSearchMode } from "./lib/gemini";
 import { getCachedAnalysis, setCachedAnalysis } from "./lib/analysis-cache";
 import { domainCheck } from "./modules/domain-check";
 import {
@@ -30,11 +30,12 @@ export async function analyzeName(
   secrets: { googleAiKey: string; dataGovKey?: string },
   category?: string,
   modelId?: GeminiModelId,
+  brandSearchMode: BrandSearchMode = "lite",
 ): Promise<AnalyzeNameResponse> {
   const model = resolveGeminiModelId(modelId);
   const [domain, seo] = await Promise.all([
     domainCheck(name),
-    seoCheck(name, secrets.googleAiKey, category, model),
+    seoCheck(name, secrets.googleAiKey, category, model, brandSearchMode),
   ]);
 
   const registration = REGISTRATION_CHECK_ENABLED
@@ -56,10 +57,11 @@ export async function analyzeNameWithProgress(
   category: string | undefined,
   onProgress: (event: AnalysisProgressEvent) => void,
   modelId?: GeminiModelId,
-  options?: { skipSeoIfDomainBelow?: number },
+  options?: { skipSeoIfDomainBelow?: number; brandSearchMode?: BrandSearchMode },
 ): Promise<AnalyzeNameResponse> {
   const model = resolveGeminiModelId(modelId);
-  const cacheKey = analysisCacheKey(name, model);
+  const brandSearchMode = options?.brandSearchMode ?? "lite";
+  const cacheKey = analysisCacheKey(name, model, brandSearchMode);
   const cached = await getCachedAnalysis(cacheKey);
   if (cached) {
     onProgress({ type: "domain_start", name });
@@ -94,11 +96,10 @@ export async function analyzeNameWithProgress(
   } else {
     onProgress({ type: "seo_start", name });
     try {
-      seo = await seoCheck(name, secrets.googleAiKey, category, model);
+      seo = await seoCheck(name, secrets.googleAiKey, category, model, brandSearchMode);
       onProgress({ type: "seo_done", name, seo });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Brand search failed";
-      onProgress({ type: "seo_failed", name, message });
+    } catch {
+      onProgress({ type: "seo_failed", name, message: "Brand search could not be completed." });
       seo = {
         score: 0,
         isExistingBrand: false,

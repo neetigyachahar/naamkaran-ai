@@ -1,8 +1,16 @@
+import type { AiApiOperation } from "@naamkaran/shared";
+import { geminiApiError, wrapGeminiFailure } from "./gemini-api-error";
+
 // Free tier is often ~5 Gemini RPM → ~12s between calls at sustained max.
 // We use a shorter gap because checks run sequentially; 429 retries handle bursts.
 const MIN_GAP_MS = 4_000;
 let lastCallAt = 0;
 let chain: Promise<void> = Promise.resolve();
+
+export interface GeminiFetchOptions {
+  maxAttempts?: number;
+  operation: AiApiOperation;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -43,21 +51,30 @@ export async function waitForGeminiSlot(): Promise<void> {
 export async function geminiFetch(
   url: string,
   init: RequestInit,
-  maxAttempts = 5,
+  options: GeminiFetchOptions,
 ): Promise<Response> {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    await waitForGeminiSlot();
+  const { operation, maxAttempts = 5 } = options;
 
-    const response = await fetch(url, init);
+  try {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await waitForGeminiSlot();
 
-    if (response.status !== 429) {
-      return response;
+      const response = await fetch(url, init);
+
+      if (response.status !== 429) {
+        return response;
+      }
+
+      const body = await response.text();
+      const retryMs = parseRetryDelayMs(body) ?? MIN_GAP_MS * (attempt + 1);
+      await sleep(retryMs);
     }
 
-    const body = await response.text();
-    const retryMs = parseRetryDelayMs(body) ?? MIN_GAP_MS * (attempt + 1);
-    await sleep(retryMs);
+    throw geminiApiError("Gemini API rate limit exceeded after retries", operation, {
+      code: "rate_limit",
+      httpStatus: 429,
+    });
+  } catch (error) {
+    throw wrapGeminiFailure(error, operation);
   }
-
-  throw new Error("Gemini API rate limit exceeded after retries");
 }

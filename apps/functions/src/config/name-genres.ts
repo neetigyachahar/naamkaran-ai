@@ -23,7 +23,7 @@ You may draw from any technique — or mix them — depending on what suits the 
 - Twisted spellings of familiar words
 - Verb + object action phrases (MakeMyTrip-style) if that fits
 - Desi-modern phonetics for India-first products
-- Short minimal tech names for B2B/SaaS
+- Crisp tech names for B2B/SaaS
 - Playful consumer-friendly sounds for apps
 - Premium restrained names for luxury positioning
 - Compounds or portmanteaus when they tell the story well
@@ -57,7 +57,7 @@ Structure: [Verb][Connector][Noun] written as one PascalCase or camelCase brand 
 - Instantly communicates the core user action and benefit
 - Reads naturally when spoken: "Just [BrandName] it"
 - Works as both brand and verb ("I'll MakeMyTrip that flight")
-- 2–4 syllables total when spoken as one word
+- 2–4 syllables when spoken as one word (recommended — longer is fine if natural)
 - Strong verbs: Book, Make, Find, Get, Pay, Send, Build, Grow, Hire, Learn, Cook, Ship, Save, Track, Plan, Book, Order, Rent, Sell, Fix, Compare, Discover
 
 ## Strict rules
@@ -76,10 +76,10 @@ Structure: [Verb][Connector][Noun] written as one PascalCase or camelCase brand 
 Names that feel like they already exist on TikTok, Instagram, or in a group chat — not in a boardroom.
 
 ## Phonetic & structural traits
-- Length: 4–8 characters strongly preferred
+- Recommended length: 4–8 characters — fine to go shorter or longer if it fits
 - Vowel-heavy, easy to scream in a voice note
 - May use: dropped vowels (Flickr-style), doubled letters, soft suffixes (-ly, -oo, -i, -r)
-- One or two syllables when spoken aloud
+- Recommended: 1–2 syllables when spoken aloud — more is fine if it still feels native
 - Must pass the "would a 22-year-old screenshot this?" test
 
 ## Canonical examples (vibe reference, do not copy)
@@ -109,7 +109,7 @@ Exactly ONE word. Not two words pushed together. Not a phrase. One token.
 Stripe, Slack, Apple, Notion, Figma, Harbor, Forge, Bloom, Arc, Loom, Asana, Quartz
 
 ## Strict rules
-- 4–10 letters
+- Recommended: 4–10 letters — shorter or longer is fine when the word fits
 - Globally pronounceable on first read
 - No hyphens, no spaces, no CamelCase compounds
 - Reject portmanteaus (those belong in compound genre)
@@ -150,8 +150,7 @@ Shopify, Lyft, Tumblr, Fiverr, Canva (canvas twist), Uniqlo (unique + clothing)
 The name sounds like it belongs on a Y Combinator batch slide — confident, sparse, engineered.
 
 ## Structural traits
-- 4–7 characters ideal (8 max)
-- 1–2 syllables
+- Recommended: 4–7 characters, 1–2 syllables — fine to exceed if the name still feels sharp
 - Crisp consonants: k, t, r, x, v, z, l, n
 - Clean typography — looks great in Inter or SF Pro
 - No playful bounce, no cute suffixes
@@ -164,7 +163,7 @@ Linear, Vercel, Raycast, Arc, Snyk, Clerk, Neon, Warp, Modal, Retool
 - Reject long descriptive compounds
 - Invented names OK if they feel sharp and technical
 - Must sound credible in: "We raised our Series A for [Name]"
-- Domain-friendly: short, no awkward letter clusters`,
+- Domain-friendly: clean spelling, no awkward letter clusters`,
   },
 
   "desi-modern": {
@@ -185,7 +184,7 @@ Dunzo (done), Meesho (me + sho), Razorpay, Swiggy, Nykaa, Zerodha, CRED
 - NO stereotypical or offensive cultural references
 - NO literal English translations of Hindi phrases ("GoodName")
 - NO diacritics or Devanagari
-- 2–3 syllables when spoken
+- Recommended: 2–3 syllables when spoken — longer is fine if easy to pronounce globally
 - Name should have a story a founder can tell in one sentence
 - Avoid names that sound like government schemes`,
   },
@@ -198,7 +197,7 @@ The name makes you smile before you know what the product does. Approachable, wa
 
 ## Phonetic traits
 - Soft consonants and open vowels
-- Bouncy rhythm — often 2–3 syllables
+- Bouncy rhythm — recommended 2–3 syllables, but not required
 - May use alliteration, repetition, or diminutive sounds
 - Slightly whimsical but not childish
 
@@ -221,7 +220,7 @@ Bumble, Duolingo, Canva, Headspace, Calm, Waze, Miro, Lush, Zomato
 Understated elegance. The name whispers quality — it never shouts for attention.
 
 ## Structural traits
-- Often 2–3 syllables
+- Recommended: 2–3 syllables — longer or shorter is fine if it stays elegant
 - May use Latin roots, French influence, or refined invented phonetics
 - Clean, symmetrical spelling
 - Sounds expensive in both English and Indian English accents
@@ -250,7 +249,7 @@ Aesop, Monocle, Aman, Muji, Acne Studios, Rimowa, Bang & Olufsen → shortened: 
 - Both source words should be recognizable or the fusion intuitive
 - Hints at the product without being painfully literal
 - Memorable in one hearing, spellable after one hearing
-- 2–4 syllables total
+- Recommended: 2–4 syllables total — fine to go outside that range
 
 ## Canonical examples (study fusion, do not copy)
 Airbnb, YouTube, Facebook, Pinterest, Instagram, Dropbox, WordPress, Salesforce

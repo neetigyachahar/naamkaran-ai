@@ -6,8 +6,9 @@ interface ByokDialogProps {
   open: boolean;
   initialKey: string;
   initialModelId: GeminiModelId;
+  initialDeepBrandSearch: boolean;
   onClose: () => void;
-  onSave: (apiKey: string, modelId: GeminiModelId) => void;
+  onSave: (apiKey: string, modelId: GeminiModelId, deepBrandSearch: boolean) => void;
   onClear: () => void;
 }
 
@@ -15,20 +16,23 @@ export function ByokDialog({
   open,
   initialKey,
   initialModelId,
+  initialDeepBrandSearch,
   onClose,
   onSave,
   onClear,
 }: ByokDialogProps) {
   const [keyInput, setKeyInput] = useState(initialKey);
   const [modelId, setModelId] = useState<GeminiModelId>(initialModelId);
+  const [deepBrandSearch, setDeepBrandSearch] = useState(initialDeepBrandSearch);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setKeyInput(initialKey);
     setModelId(initialModelId);
+    setDeepBrandSearch(initialDeepBrandSearch);
     setError(null);
-  }, [open, initialKey, initialModelId]);
+  }, [open, initialKey, initialModelId, initialDeepBrandSearch]);
 
   if (!open) return null;
 
@@ -38,7 +42,7 @@ export function ByokDialog({
       setError("Enter a valid Gemini API key.");
       return;
     }
-    onSave(trimmed, modelId);
+    onSave(trimmed, modelId, deepBrandSearch);
     onClose();
   }
 
@@ -111,6 +115,21 @@ export function ByokDialog({
               ))}
             </select>
           </div>
+
+          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-3">
+            <input
+              type="checkbox"
+              checked={deepBrandSearch}
+              onChange={(e) => setDeepBrandSearch(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <span className="text-sm text-slate-700">
+              <span className="font-medium text-slate-900">Deep brand search</span>
+              <span className="mt-0.5 block text-slate-500">
+                Slower, multi-angle Google search on your key.
+              </span>
+            </span>
+          </label>
 
           {error && (
             <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>

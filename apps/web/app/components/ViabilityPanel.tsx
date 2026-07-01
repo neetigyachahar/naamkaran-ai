@@ -6,6 +6,7 @@ import type {
 } from "@naamkaran/shared";
 import type { AnalyzeProgressState } from "../lib/analyze-stream";
 import { CATEGORIES } from "../lib/constants";
+import { AnalyticsEvents, trackEvent } from "../lib/analytics";
 import {
   availabilityClass,
   availabilityLabel,
@@ -22,7 +23,12 @@ interface ViabilityPanelProps {
   loading: boolean;
   error: string | null;
   seoError: string | null;
+  deepBrandSearch?: boolean;
   onAnalyze: (name: string, category?: string) => void;
+}
+
+function brandSearchModeLabel(deepBrandSearch: boolean): string {
+  return deepBrandSearch ? "Deep search" : "Quick mode";
 }
 
 function HeaderStatus({
@@ -30,11 +36,13 @@ function HeaderStatus({
   domainPending,
   seoPending,
   seoError,
+  deepBrandSearch,
 }: {
   compositeScore: number | null;
   domainPending: boolean;
   seoPending: boolean;
   seoError: string | null;
+  deepBrandSearch: boolean;
 }) {
   if (compositeScore != null) {
     return (
@@ -47,7 +55,13 @@ function HeaderStatus({
     return <p className="text-sm text-slate-500">Checking domain availability…</p>;
   }
   if (seoPending) {
-    return <p className="text-sm text-slate-500">Running Google brand search…</p>;
+    return (
+      <p className="text-sm text-slate-500">
+        {deepBrandSearch
+          ? "Running deep brand search…"
+          : "Running quick brand search…"}
+      </p>
+    );
   }
   if (seoError) {
     return <p className="text-sm text-amber-700">Domain checked — brand search failed</p>;
@@ -59,10 +73,12 @@ function BrandSection({
   seo,
   seoError,
   seoPending,
+  deepBrandSearch,
 }: {
   seo: SeoResult | null;
   seoError: string | null;
   seoPending: boolean;
+  deepBrandSearch: boolean;
 }) {
   if (seoError) {
     return (
@@ -80,10 +96,15 @@ function BrandSection({
     );
   }
   if (seo) {
-    return <BrandResults seo={seo} />;
+    return <BrandResults seo={seo} deepBrandSearch={deepBrandSearch} />;
   }
   if (seoPending) {
-    return <ModuleCardSkeleton title="Brand uniqueness" />;
+    return (
+      <ModuleCardSkeleton
+        title="Brand uniqueness"
+        subtitle={`Checking in ${brandSearchModeLabel(deepBrandSearch).toLowerCase()}…`}
+      />
+    );
   }
   return null;
 }
@@ -92,13 +113,17 @@ function SkeletonBar({ className = "" }: { className?: string }) {
   return <div className={`animate-pulse rounded bg-slate-200 ${className}`} />;
 }
 
-function ModuleCardSkeleton({ title }: { title: string }) {
+function ModuleCardSkeleton({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="flex items-center justify-between">
         <div className="space-y-2">
           <p className="font-semibold text-slate-900">{title}</p>
-          <SkeletonBar className="h-3 w-16" />
+          {subtitle ? (
+            <p className="text-xs text-indigo-600">{subtitle}</p>
+          ) : (
+            <SkeletonBar className="h-3 w-16" />
+          )}
         </div>
         <SkeletonBar className="h-10 w-10 rounded-full" />
       </div>
@@ -149,10 +174,19 @@ function DomainResults({
   );
 }
 
-function BrandResults({ seo }: { seo: SeoResult }) {
+function BrandResults({
+  seo,
+  deepBrandSearch,
+}: {
+  seo: SeoResult;
+  deepBrandSearch: boolean;
+}) {
   return (
     <ExpandableCard title="Brand uniqueness" score={seo.score} weight="50%">
-      <p className="text-sm text-slate-700">{seo.summary}</p>
+      <p className="text-xs font-medium text-slate-400">
+        {brandSearchModeLabel(deepBrandSearch)}
+      </p>
+      <p className="mt-1 text-sm text-slate-700">{seo.summary}</p>
       <p className="mt-2 text-sm text-slate-600">
         Existing brand? <strong>{seo.isExistingBrand ? "Yes" : "No"}</strong>
         <span className="mx-2">·</span>
@@ -186,6 +220,7 @@ function ViabilityContent({
   seoError,
   domainPending,
   seoPending,
+  deepBrandSearch,
 }: {
   name: string;
   domain: DomainCheckResult | null;
@@ -194,6 +229,7 @@ function ViabilityContent({
   seoError: string | null;
   domainPending: boolean;
   seoPending: boolean;
+  deepBrandSearch: boolean;
 }) {
   return (
     <div className="space-y-4 p-4 sm:p-5">
@@ -208,6 +244,7 @@ function ViabilityContent({
             domainPending={domainPending}
             seoPending={seoPending}
             seoError={seoError}
+            deepBrandSearch={deepBrandSearch}
           />
         </div>
       </header>
@@ -218,7 +255,12 @@ function ViabilityContent({
         <ModuleCardSkeleton title="Domain availability" />
       ) : null}
 
-      <BrandSection seo={seo} seoError={seoError} seoPending={seoPending} />
+      <BrandSection
+        seo={seo}
+        seoError={seoError}
+        seoPending={seoPending}
+        deepBrandSearch={deepBrandSearch}
+      />
     </div>
   );
 }
@@ -252,7 +294,7 @@ function EmptyState() {
             <div>
               <p className="text-sm font-medium text-slate-900">Click any suggestion</p>
               <p className="mt-0.5 text-sm text-slate-500">
-                We check domains (RDAP/WHOIS) and brand conflicts instantly.
+                We check domains (RDAP/WHOIS) and run a quick brand search on Google.
               </p>
             </div>
           </li>
@@ -288,7 +330,12 @@ function ManualSearch({
       onSubmit={(e) => {
         e.preventDefault();
         const trimmed = name.trim();
-        if (trimmed) onAnalyze(trimmed, category || undefined);
+        if (trimmed) {
+          trackEvent(AnalyticsEvents.MANUAL_VIABILITY_CHECK, {
+            has_category: Boolean(category),
+          });
+          onAnalyze(trimmed, category || undefined);
+        }
       }}
       className="border-t border-slate-200 bg-white p-3 sm:p-4"
     >
@@ -337,6 +384,7 @@ export function ViabilityPanel({
   loading,
   error,
   seoError,
+  deepBrandSearch = false,
   onAnalyze,
 }: ViabilityPanelProps) {
   const viewName = result?.name ?? progress?.name ?? selectedName;
@@ -353,7 +401,9 @@ export function ViabilityPanel({
     <div className="flex h-full min-w-0 flex-col overflow-hidden bg-slate-50/80">
       <div className="hidden h-20 shrink-0 flex-col justify-center border-b border-slate-200 bg-white px-4 lg:flex">
         <h2 className="font-semibold text-slate-900">Viability score</h2>
-        <p className="line-clamp-2 text-sm text-slate-500">Domain availability + brand uniqueness</p>
+        <p className="line-clamp-2 text-sm text-slate-500">
+          Domain availability + brand uniqueness (quick mode by default)
+        </p>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -370,6 +420,7 @@ export function ViabilityPanel({
             seoError={activeSeoError}
             domainPending={domainPending}
             seoPending={seoPending}
+            deepBrandSearch={deepBrandSearch}
           />
         ) : (
           <EmptyState />

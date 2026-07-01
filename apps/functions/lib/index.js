@@ -4156,8 +4156,23 @@ var AnalyzeStreamRequestSchema = external_exports.object({
     external_exports.string().max(100).optional()
   ),
   model: GeminiModelIdSchema.optional(),
-  apiKey: external_exports.string().min(10).optional()
+  apiKey: external_exports.string().min(10).optional(),
+  deepBrandSearch: external_exports.boolean().optional()
 });
+
+// ../../packages/shared/src/ai-errors.ts
+function classifyAiApiErrorCode(message) {
+  const lower = message.toLowerCase();
+  if (lower.includes("rate limit")) return "rate_limit";
+  if (lower.includes("timeout") || lower.includes("aborted") || lower.includes("timed out")) {
+    return "timeout";
+  }
+  if (lower.includes("no content") || lower.includes("returned no content")) {
+    return "no_content";
+  }
+  if (lower.includes("gemini api error") || lower.includes("api error")) return "api_error";
+  return "unknown";
+}
 
 // ../../packages/shared/src/types.ts
 var AnalyzeNameRequestSchema = external_exports.object({
@@ -4167,7 +4182,8 @@ var AnalyzeNameRequestSchema = external_exports.object({
     external_exports.string().max(100).optional()
   ),
   model: GeminiModelIdSchema.optional(),
-  apiKey: external_exports.string().min(10).optional()
+  apiKey: external_exports.string().min(10).optional(),
+  deepBrandSearch: external_exports.boolean().optional()
 });
 var DomainResultSchema = external_exports.object({
   tld: external_exports.string(),
@@ -4242,8 +4258,8 @@ var REGISTRATION_CHECK_ENABLED = false;
 function getGeminiGenerateUrl(modelId) {
   return `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
 }
-function analysisCacheKey(name, modelId) {
-  return `${name.toLowerCase().trim()}:${modelId}`;
+function analysisCacheKey(name, modelId, brandSearchMode = "lite") {
+  return `${name.toLowerCase().trim()}:${modelId}:${brandSearchMode}`;
 }
 
 // src/lib/analysis-cache.ts
@@ -4617,6 +4633,35 @@ function disabledRegistrationResult(name) {
   };
 }
 
+// src/lib/gemini-api-error.ts
+var GeminiApiError = class extends Error {
+  code;
+  operation;
+  httpStatus;
+  constructor(message, operation, options) {
+    super(message);
+    this.name = "GeminiApiError";
+    this.operation = operation;
+    this.code = options?.code ?? classifyAiApiErrorCode(message);
+    this.httpStatus = options?.httpStatus;
+  }
+};
+function geminiApiError(message, operation, options) {
+  return new GeminiApiError(message, operation, options);
+}
+function wrapGeminiFailure(error, operation) {
+  if (error instanceof GeminiApiError) return error;
+  if (error instanceof Error) {
+    if (error.name === "TimeoutError" || error.name === "AbortError") {
+      return geminiApiError(error.message || "Gemini request timed out", operation, {
+        code: "timeout"
+      });
+    }
+    return geminiApiError(error.message, operation);
+  }
+  return geminiApiError("Gemini request failed", operation);
+}
+
 // src/lib/gemini-throttle.ts
 var MIN_GAP_MS = 4e3;
 var lastCallAt = 0;
@@ -4649,24 +4694,44 @@ async function waitForGeminiSlot() {
   });
   await chain;
 }
-async function geminiFetch(url, init, maxAttempts = 5) {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    await waitForGeminiSlot();
-    const response = await fetch(url, init);
-    if (response.status !== 429) {
-      return response;
+async function geminiFetch(url, init, options) {
+  const { operation, maxAttempts = 5 } = options;
+  try {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await waitForGeminiSlot();
+      const response = await fetch(url, init);
+      if (response.status !== 429) {
+        return response;
+      }
+      const body = await response.text();
+      const retryMs = parseRetryDelayMs(body) ?? MIN_GAP_MS * (attempt + 1);
+      await sleep(retryMs);
     }
-    const body = await response.text();
-    const retryMs = parseRetryDelayMs(body) ?? MIN_GAP_MS * (attempt + 1);
-    await sleep(retryMs);
+    throw geminiApiError("Gemini API rate limit exceeded after retries", operation, {
+      code: "rate_limit",
+      httpStatus: 429
+    });
+  } catch (error) {
+    throw wrapGeminiFailure(error, operation);
   }
-  throw new Error("Gemini API rate limit exceeded after retries");
 }
 
 // src/modules/seo-check.ts
+var LITE_TIMEOUT_MS = 6e4;
+var DEEP_TIMEOUT_MS = 45e3;
+var LITE_MAX_OUTPUT_TOKENS = 384;
+var DEEP_MAX_OUTPUT_TOKENS = 512;
 var BORDERLINE_LOW = 35;
 var BORDERLINE_HIGH = 65;
-function buildPrimaryPrompt(name, category) {
+function buildLitePrompt(name, category) {
+  const context = category ? ` in ${category}` : "";
+  return `One quick web search: is "${name}"${context} already a known brand, product, company, or app?
+
+Be brief. If you find a clear match, set isExistingBrand true.
+
+Respond ONLY with JSON (no markdown): {"isExistingBrand": boolean, "confidence": 0-100, "summary": "one sentence", "competitors": ["name1"]}`;
+}
+function buildDeepPrimaryPrompt(name, category) {
   const categorySearch = category ? `3. "${name}" ${category} company or product in India` : `3. "${name}" India startup or company`;
   return `Run separate web searches for the name "${name}":
 1. Exact match \u2014 is this already a known brand, product, or company name?
@@ -4677,7 +4742,7 @@ Synthesize all angles. If any search finds a clear existing brand or product, se
 
 Respond ONLY with JSON (no markdown): {"isExistingBrand": boolean, "confidence": 0-100, "summary": "1-2 sentence explanation", "competitors": ["name1", "name2"]}`;
 }
-function buildFollowUpPrompt(name, category) {
+function buildDeepFollowUpPrompt(name, category) {
   const context = category ? ` in the ${category} space` : "";
   return `Search whether "${name}"${context} has an official website, app store listing, Crunchbase profile, LinkedIn company page, or news coverage as an established business.
 
@@ -4685,15 +4750,98 @@ Focus on distinguishing real brands from generic/unrelated word matches.
 
 Respond ONLY with JSON (no markdown): {"isExistingBrand": boolean, "confidence": 0-100, "summary": "1-2 sentence explanation", "competitors": ["name1", "name2"]}`;
 }
-function parseGeminiJson(text) {
-  const cleaned = text.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
-  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-  const parsed = JSON.parse(jsonMatch?.[0] ?? cleaned);
+function tryParseJsonObject(candidate) {
+  try {
+    const parsed = JSON.parse(candidate);
+    return normalizeGeminiPayload(parsed);
+  } catch {
+    return null;
+  }
+}
+function repairTruncatedJsonCandidates(candidate) {
+  const trimmed = candidate.trim().replace(/,\s*$/, "");
+  return [
+    `${trimmed}"}`,
+    `${trimmed}"}}`,
+    `${trimmed}}`,
+    `${trimmed}"]}`,
+    `${trimmed}"}]}`,
+    `${trimmed}"]}}`
+  ];
+}
+function extractGeminiFieldsRegex(text) {
+  const isBrandMatch = text.match(/"isExistingBrand"\s*:\s*(true|false)/i);
+  const confMatch = text.match(/"confidence"\s*:\s*(\d+)/);
+  const summaryMatch = text.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)(?:"|$)/s);
+  if (!isBrandMatch && !confMatch && !summaryMatch) {
+    return null;
+  }
+  const summary = summaryMatch?.[1]?.replace(/\\"/g, '"').replace(/\\n/g, " ").trim() ?? "";
+  return {
+    isExistingBrand: isBrandMatch?.[1]?.toLowerCase() === "true",
+    confidence: confMatch ? Number(confMatch[1]) : 0,
+    summary,
+    competitors: void 0
+  };
+}
+function isWeakSummary(summary) {
+  const s = summary.trim().toLowerCase();
+  if (!s) return true;
+  return s.includes("re-run") || s.includes("partial") || s.includes("incomplete") || s.includes("no summary available");
+}
+function fallbackSummary(name, isExistingBrand, confidence) {
+  if (isExistingBrand) {
+    return confidence >= 70 ? `"${name}" matches an existing brand or product in web search results.` : `"${name}" may overlap with an existing brand \u2014 review the sources below.`;
+  }
+  return `"${name}" does not appear to be a widely known brand in quick search results.`;
+}
+function normalizeGeminiPayload(parsed) {
   return {
     isExistingBrand: Boolean(parsed.isExistingBrand),
     confidence: Math.min(100, Math.max(0, Number(parsed.confidence) || 0)),
-    summary: String(parsed.summary || "No summary available."),
+    summary: String(parsed.summary || "").trim(),
     competitors: parsed.competitors
+  };
+}
+function parseGeminiJson(text, name) {
+  const cleaned = text.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+  const jsonMatch = cleaned.match(/\{[\s\S]*/);
+  const candidate = jsonMatch?.[0] ?? cleaned;
+  const direct = tryParseJsonObject(candidate);
+  if (direct && !isWeakSummary(direct.summary)) {
+    return { payload: direct, quality: "full" };
+  }
+  for (const repaired of repairTruncatedJsonCandidates(candidate)) {
+    const parsed = tryParseJsonObject(repaired);
+    if (parsed && !isWeakSummary(parsed.summary)) {
+      return { payload: parsed, quality: "full" };
+    }
+  }
+  const extracted = extractGeminiFieldsRegex(candidate);
+  if (extracted) {
+    const payload = {
+      ...extracted,
+      summary: isWeakSummary(extracted.summary) ? fallbackSummary(name, extracted.isExistingBrand, extracted.confidence) : extracted.summary
+    };
+    return { payload, quality: isWeakSummary(extracted.summary) ? "partial" : "full" };
+  }
+  if (direct) {
+    return {
+      payload: {
+        ...direct,
+        summary: fallbackSummary(name, direct.isExistingBrand, direct.confidence)
+      },
+      quality: "partial"
+    };
+  }
+  return {
+    payload: {
+      isExistingBrand: false,
+      confidence: 0,
+      summary: fallbackSummary(name, false, 0),
+      competitors: void 0
+    },
+    quality: "failed"
   };
 }
 function extractSources(chunks) {
@@ -4710,30 +4858,97 @@ function extractSources(chunks) {
   }
   return sources;
 }
-async function callGeminiSearch(apiKey, prompt, modelId) {
-  const response = await geminiFetch(`${getGeminiGenerateUrl(modelId)}?key=${apiKey}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      tools: [{ google_search: {} }]
-    }),
-    signal: AbortSignal.timeout(45e3)
-  });
+async function callGeminiText(apiKey, prompt, modelId, maxOutputTokens) {
+  const response = await geminiFetch(
+    `${getGeminiGenerateUrl(modelId)}?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens }
+      }),
+      signal: AbortSignal.timeout(15e3)
+    },
+    { operation: "brand_search" }
+  );
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Gemini API error ${response.status}: ${body}`);
+    return "";
+  }
+  const data = await response.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
+}
+async function writeBrandSummary(apiKey, name, payload, sources, modelId) {
+  const sourceHint = sources.slice(0, 5).map((s) => s.title).join(", ");
+  const generated = await callGeminiText(
+    apiKey,
+    `Write one clear sentence about brand uniqueness for the name "${name}".
+Existing brand: ${payload.isExistingBrand}
+Confidence: ${payload.confidence}%
+${sourceHint ? `Sources: ${sourceHint}` : ""}
+
+Reply with only the summary sentence.`,
+    modelId,
+    128
+  );
+  if (generated && !isWeakSummary(generated)) {
+    return generated;
+  }
+  return fallbackSummary(name, payload.isExistingBrand, payload.confidence);
+}
+async function executeGeminiSearch(apiKey, prompt, modelId, mode) {
+  const response = await geminiFetch(
+    `${getGeminiGenerateUrl(modelId)}?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        tools: [{ google_search: {} }],
+        generationConfig: {
+          maxOutputTokens: mode === "deep" ? DEEP_MAX_OUTPUT_TOKENS : LITE_MAX_OUTPUT_TOKENS
+        }
+      }),
+      signal: AbortSignal.timeout(mode === "deep" ? DEEP_TIMEOUT_MS : LITE_TIMEOUT_MS)
+    },
+    { operation: "brand_search" }
+  );
+  if (!response.ok) {
+    return null;
   }
   const data = await response.json();
   const candidate = data.candidates?.[0];
   const text = candidate?.content?.parts?.[0]?.text;
   if (!text) {
-    throw new Error("Gemini returned no content");
+    return null;
   }
   return {
-    payload: parseGeminiJson(text),
+    text,
     sources: extractSources(candidate.groundingMetadata?.groundingChunks)
   };
+}
+async function callGeminiSearch(apiKey, prompt, name, modelId, mode) {
+  const raw = await executeGeminiSearch(apiKey, prompt, modelId, mode);
+  if (!raw) {
+    return {
+      payload: {
+        isExistingBrand: false,
+        confidence: 0,
+        summary: fallbackSummary(name, false, 0),
+        competitors: void 0
+      },
+      sources: []
+    };
+  }
+  let { payload, quality } = parseGeminiJson(raw.text, name);
+  let sources = raw.sources;
+  if (quality !== "full" || isWeakSummary(payload.summary)) {
+    payload = {
+      ...payload,
+      summary: await writeBrandSummary(apiKey, name, payload, sources, modelId)
+    };
+  }
+  return { payload, sources };
 }
 function mergeSources(...sourceLists) {
   const seen = /* @__PURE__ */ new Set();
@@ -4756,10 +4971,9 @@ function mergePayloads(primary, secondary) {
   } else {
     confidence = Math.round((primary.confidence + secondary.confidence) / 2);
   }
-  const competitors = [
-    ...primary.competitors ?? [],
-    ...secondary.competitors ?? []
-  ].filter((value, index, array) => array.indexOf(value) === index);
+  const competitors = [...primary.competitors ?? [], ...secondary.competitors ?? []].filter(
+    (value, index, array) => array.indexOf(value) === index
+  );
   const summary = primary.summary === secondary.summary ? primary.summary : `${primary.summary} ${secondary.summary}`.trim();
   return {
     isExistingBrand,
@@ -4780,20 +4994,30 @@ function isBorderline(confidence, isExistingBrand) {
   }
   return confidence > BORDERLINE_LOW && confidence < BORDERLINE_HIGH;
 }
-async function seoCheck(name, apiKey, category, modelId) {
-  const model = resolveGeminiModelId(modelId);
-  const primary = await callGeminiSearch(apiKey, buildPrimaryPrompt(name, category), model);
-  let payload = primary.payload;
-  let sources = primary.sources;
-  if (isBorderline(primary.payload.confidence, primary.payload.isExistingBrand)) {
-    const followUp = await callGeminiSearch(
-      apiKey,
-      buildFollowUpPrompt(name, category),
-      model
-    );
-    payload = mergePayloads(primary.payload, followUp.payload);
-    sources = mergeSources(primary.sources, followUp.sources);
-  }
+function isSearchTimeout(error) {
+  if (!(error instanceof Error)) return false;
+  return error.name === "TimeoutError" || error.name === "AbortError" || /timed?\s*out|aborted/i.test(error.message);
+}
+function unavailableSeoResult(name) {
+  return {
+    score: 50,
+    isExistingBrand: false,
+    confidence: 0,
+    summary: fallbackSummary(name, false, 0),
+    sources: []
+  };
+}
+function timedOutSeoResult(mode) {
+  const summary = mode === "deep" ? "Deep brand search could not confirm uniqueness from available results." : "Quick brand search could not confirm uniqueness from available results.";
+  return {
+    score: 50,
+    isExistingBrand: false,
+    confidence: 0,
+    summary,
+    sources: []
+  };
+}
+function toSeoResult(payload, sources) {
   return {
     score: computeSeoScore(payload.isExistingBrand, payload.confidence),
     isExistingBrand: payload.isExistingBrand,
@@ -4802,17 +5026,64 @@ async function seoCheck(name, apiKey, category, modelId) {
     sources
   };
 }
+async function seoCheckLite(name, apiKey, category, model) {
+  const { payload, sources } = await callGeminiSearch(
+    apiKey,
+    buildLitePrompt(name, category),
+    name,
+    model,
+    "lite"
+  );
+  return toSeoResult(payload, sources);
+}
+async function seoCheckDeep(name, apiKey, category, model) {
+  const primary = await callGeminiSearch(
+    apiKey,
+    buildDeepPrimaryPrompt(name, category),
+    name,
+    model,
+    "deep"
+  );
+  let payload = primary.payload;
+  let sources = primary.sources;
+  if (isBorderline(primary.payload.confidence, primary.payload.isExistingBrand)) {
+    const followUp = await callGeminiSearch(
+      apiKey,
+      buildDeepFollowUpPrompt(name, category),
+      name,
+      model,
+      "deep"
+    );
+    payload = mergePayloads(primary.payload, followUp.payload);
+    sources = mergeSources(primary.sources, followUp.sources);
+  }
+  return toSeoResult(payload, sources);
+}
+async function seoCheck(name, apiKey, category, modelId, mode = "lite") {
+  const model = resolveGeminiModelId(modelId);
+  try {
+    if (mode === "deep") {
+      return await seoCheckDeep(name, apiKey, category, model);
+    }
+    return await seoCheckLite(name, apiKey, category, model);
+  } catch (error) {
+    if (isSearchTimeout(error)) {
+      return timedOutSeoResult(mode);
+    }
+    return unavailableSeoResult(name);
+  }
+}
 
 // src/orchestrator.ts
 function computeCompositeScore(domainScore, seoScore) {
   const composite = domainScore * ACTIVE_SCORE_WEIGHTS.domain + seoScore * ACTIVE_SCORE_WEIGHTS.seo;
   return Math.round(composite);
 }
-async function analyzeName(name, secrets2, category, modelId) {
+async function analyzeName(name, secrets2, category, modelId, brandSearchMode = "lite") {
   const model = resolveGeminiModelId(modelId);
   const [domain, seo] = await Promise.all([
     domainCheck(name),
-    seoCheck(name, secrets2.googleAiKey, category, model)
+    seoCheck(name, secrets2.googleAiKey, category, model, brandSearchMode)
   ]);
   const registration = REGISTRATION_CHECK_ENABLED ? await registrationCheck(name, secrets2.dataGovKey) : disabledRegistrationResult(name);
   return {
@@ -4825,7 +5096,8 @@ async function analyzeName(name, secrets2, category, modelId) {
 }
 async function analyzeNameWithProgress(name, secrets2, category, onProgress, modelId, options) {
   const model = resolveGeminiModelId(modelId);
-  const cacheKey = analysisCacheKey(name, model);
+  const brandSearchMode = options?.brandSearchMode ?? "lite";
+  const cacheKey = analysisCacheKey(name, model, brandSearchMode);
   const cached = await getCachedAnalysis(cacheKey);
   if (cached) {
     onProgress({ type: "domain_start", name });
@@ -4853,11 +5125,10 @@ async function analyzeNameWithProgress(name, secrets2, category, onProgress, mod
   } else {
     onProgress({ type: "seo_start", name });
     try {
-      seo = await seoCheck(name, secrets2.googleAiKey, category, model);
+      seo = await seoCheck(name, secrets2.googleAiKey, category, model, brandSearchMode);
       onProgress({ type: "seo_done", name, seo });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Brand search failed";
-      onProgress({ type: "seo_failed", name, message });
+    } catch {
+      onProgress({ type: "seo_failed", name, message: "Brand search could not be completed." });
       seo = {
         score: 0,
         isExistingBrand: false,
@@ -4880,9 +5151,9 @@ async function analyzeNameWithProgress(name, secrets2, category, onProgress, mod
 }
 
 // src/modules/analyze-stream.ts
-async function runAnalyzeStream(name, secrets2, category, modelId, emit) {
+async function runAnalyzeStream(name, secrets2, category, modelId, emit, brandSearchMode = "lite") {
   const model = resolveGeminiModelId(modelId);
-  const cacheKey = analysisCacheKey(name, model);
+  const cacheKey = analysisCacheKey(name, model, brandSearchMode);
   const cached = await getCachedAnalysis(cacheKey);
   if (cached) {
     emit({ type: "domain_check", name, status: "start" });
@@ -4920,7 +5191,8 @@ async function runAnalyzeStream(name, secrets2, category, modelId, emit) {
           emit({ type: "seo_error", name, message: step.message });
         }
       },
-      model
+      model,
+      { brandSearchMode }
     );
     await setCachedAnalysis(cacheKey, result);
     emit({ type: "done", result });
@@ -4949,7 +5221,7 @@ You may draw from any technique \u2014 or mix them \u2014 depending on what suit
 - Twisted spellings of familiar words
 - Verb + object action phrases (MakeMyTrip-style) if that fits
 - Desi-modern phonetics for India-first products
-- Short minimal tech names for B2B/SaaS
+- Crisp tech names for B2B/SaaS
 - Playful consumer-friendly sounds for apps
 - Premium restrained names for luxury positioning
 - Compounds or portmanteaus when they tell the story well
@@ -4982,7 +5254,7 @@ Structure: [Verb][Connector][Noun] written as one PascalCase or camelCase brand 
 - Instantly communicates the core user action and benefit
 - Reads naturally when spoken: "Just [BrandName] it"
 - Works as both brand and verb ("I'll MakeMyTrip that flight")
-- 2\u20134 syllables total when spoken as one word
+- 2\u20134 syllables when spoken as one word (recommended \u2014 longer is fine if natural)
 - Strong verbs: Book, Make, Find, Get, Pay, Send, Build, Grow, Hire, Learn, Cook, Ship, Save, Track, Plan, Book, Order, Rent, Sell, Fix, Compare, Discover
 
 ## Strict rules
@@ -5000,10 +5272,10 @@ Structure: [Verb][Connector][Noun] written as one PascalCase or camelCase brand 
 Names that feel like they already exist on TikTok, Instagram, or in a group chat \u2014 not in a boardroom.
 
 ## Phonetic & structural traits
-- Length: 4\u20138 characters strongly preferred
+- Recommended length: 4\u20138 characters \u2014 fine to go shorter or longer if it fits
 - Vowel-heavy, easy to scream in a voice note
 - May use: dropped vowels (Flickr-style), doubled letters, soft suffixes (-ly, -oo, -i, -r)
-- One or two syllables when spoken aloud
+- Recommended: 1\u20132 syllables when spoken aloud \u2014 more is fine if it still feels native
 - Must pass the "would a 22-year-old screenshot this?" test
 
 ## Canonical examples (vibe reference, do not copy)
@@ -5032,7 +5304,7 @@ Exactly ONE word. Not two words pushed together. Not a phrase. One token.
 Stripe, Slack, Apple, Notion, Figma, Harbor, Forge, Bloom, Arc, Loom, Asana, Quartz
 
 ## Strict rules
-- 4\u201310 letters
+- Recommended: 4\u201310 letters \u2014 shorter or longer is fine when the word fits
 - Globally pronounceable on first read
 - No hyphens, no spaces, no CamelCase compounds
 - Reject portmanteaus (those belong in compound genre)
@@ -5071,8 +5343,7 @@ Shopify, Lyft, Tumblr, Fiverr, Canva (canvas twist), Uniqlo (unique + clothing)
 The name sounds like it belongs on a Y Combinator batch slide \u2014 confident, sparse, engineered.
 
 ## Structural traits
-- 4\u20137 characters ideal (8 max)
-- 1\u20132 syllables
+- Recommended: 4\u20137 characters, 1\u20132 syllables \u2014 fine to exceed if the name still feels sharp
 - Crisp consonants: k, t, r, x, v, z, l, n
 - Clean typography \u2014 looks great in Inter or SF Pro
 - No playful bounce, no cute suffixes
@@ -5085,7 +5356,7 @@ Linear, Vercel, Raycast, Arc, Snyk, Clerk, Neon, Warp, Modal, Retool
 - Reject long descriptive compounds
 - Invented names OK if they feel sharp and technical
 - Must sound credible in: "We raised our Series A for [Name]"
-- Domain-friendly: short, no awkward letter clusters`
+- Domain-friendly: clean spelling, no awkward letter clusters`
   },
   "desi-modern": {
     system: `You are an expert brand namer for DESI MODERN startups \u2014 Indian roots, global pronunciation.
@@ -5105,7 +5376,7 @@ Dunzo (done), Meesho (me + sho), Razorpay, Swiggy, Nykaa, Zerodha, CRED
 - NO stereotypical or offensive cultural references
 - NO literal English translations of Hindi phrases ("GoodName")
 - NO diacritics or Devanagari
-- 2\u20133 syllables when spoken
+- Recommended: 2\u20133 syllables when spoken \u2014 longer is fine if easy to pronounce globally
 - Name should have a story a founder can tell in one sentence
 - Avoid names that sound like government schemes`
   },
@@ -5117,7 +5388,7 @@ The name makes you smile before you know what the product does. Approachable, wa
 
 ## Phonetic traits
 - Soft consonants and open vowels
-- Bouncy rhythm \u2014 often 2\u20133 syllables
+- Bouncy rhythm \u2014 recommended 2\u20133 syllables, but not required
 - May use alliteration, repetition, or diminutive sounds
 - Slightly whimsical but not childish
 
@@ -5139,7 +5410,7 @@ Bumble, Duolingo, Canva, Headspace, Calm, Waze, Miro, Lush, Zomato
 Understated elegance. The name whispers quality \u2014 it never shouts for attention.
 
 ## Structural traits
-- Often 2\u20133 syllables
+- Recommended: 2\u20133 syllables \u2014 longer or shorter is fine if it stays elegant
 - May use Latin roots, French influence, or refined invented phonetics
 - Clean, symmetrical spelling
 - Sounds expensive in both English and Indian English accents
@@ -5167,7 +5438,7 @@ Aesop, Monocle, Aman, Muji, Acne Studios, Rimowa, Bang & Olufsen \u2192 shortene
 - Both source words should be recognizable or the fusion intuitive
 - Hints at the product without being painfully literal
 - Memorable in one hearing, spellable after one hearing
-- 2\u20134 syllables total
+- Recommended: 2\u20134 syllables total \u2014 fine to go outside that range
 
 ## Canonical examples (study fusion, do not copy)
 Airbnb, YouTube, Facebook, Pinterest, Instagram, Dropbox, WordPress, Salesforce
@@ -5223,6 +5494,7 @@ Tailor every name to this context while obeying all genre rules above.` : "";
 
 ## Output rules (every response)
 - ${countRule}${smartPickNote}${excludeNote}
+- Length and syllable notes in the genre rules are recommendations only \u2014 choose what fits best.
 - Every name must be unique vs all names you suggested in earlier turns in this conversation.
 - Stay strictly within the genre pattern \u2014 reject ideas that drift into other genres.
 - If the user gives follow-up feedback, refine within the same genre rules.
@@ -5256,24 +5528,30 @@ async function generateNames(genreId, messages, apiKey, context, smartPick, excl
     role: msg.role === "assistant" ? "model" : "user",
     parts: [{ text: msg.content }]
   }));
-  const response = await geminiFetch(`${getGeminiGenerateUrl(model)}?key=${apiKey}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents,
-      generationConfig: { responseMimeType: "application/json" }
-    }),
-    signal: AbortSignal.timeout(6e4)
-  });
+  const response = await geminiFetch(
+    `${getGeminiGenerateUrl(model)}?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents,
+        generationConfig: { responseMimeType: "application/json" }
+      }),
+      signal: AbortSignal.timeout(6e4)
+    },
+    { operation: "name_generate" }
+  );
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Gemini API error ${response.status}: ${body}`);
+    throw geminiApiError(`Gemini API error ${response.status}: ${body}`, "name_generate", {
+      httpStatus: response.status
+    });
   }
   const data = await response.json();
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) {
-    throw new Error("Gemini returned no content");
+    throw geminiApiError("Gemini returned no content", "name_generate", { code: "no_content" });
   }
   return parseResponse(text, nameCount);
 }
@@ -5399,6 +5677,9 @@ function resolveAiKey(requestKey) {
   }
   return serverKey;
 }
+function resolveBrandSearchMode(requestApiKey, deepBrandSearch) {
+  return requestApiKey && deepBrandSearch ? "deep" : "lite";
+}
 function resolveAiKeyOrNull(requestKey) {
   if (requestKey) return requestKey;
   return googleAiKey.value() || null;
@@ -5415,9 +5696,10 @@ var analyzeName2 = (0, import_https.onCall)(
     if (!parsed.success) {
       throw new import_https.HttpsError("invalid-argument", "Invalid request", parsed.error.flatten());
     }
-    const { name, category, model, apiKey: requestApiKey } = parsed.data;
+    const { name, category, model, apiKey: requestApiKey, deepBrandSearch } = parsed.data;
     const geminiModel = resolveGeminiModelId(model);
-    const cacheKey = analysisCacheKey(name, geminiModel);
+    const brandSearchMode = resolveBrandSearchMode(requestApiKey, deepBrandSearch);
+    const cacheKey = analysisCacheKey(name, geminiModel, brandSearchMode);
     const cached = await getCachedAnalysis(cacheKey);
     if (cached) return cached;
     const aiKey = resolveAiKey(requestApiKey);
@@ -5433,7 +5715,8 @@ var analyzeName2 = (0, import_https.onCall)(
         name,
         { googleAiKey: aiKey, dataGovKey: govKey },
         category,
-        geminiModel
+        geminiModel,
+        brandSearchMode
       );
       await setCachedAnalysis(cacheKey, result);
       return result;
@@ -5517,7 +5800,8 @@ var analyzeNameStream = (0, import_https.onRequest)(
       { googleAiKey: aiKey, dataGovKey: govKey },
       parsed.data.category,
       parsed.data.model,
-      (event) => writeSseEvent(res, event)
+      (event) => writeSseEvent(res, event),
+      resolveBrandSearchMode(parsed.data.apiKey, parsed.data.deepBrandSearch)
     );
     res.end();
   }

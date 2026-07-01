@@ -25,7 +25,7 @@ export function meta({}: Route.MetaArgs) {
 type MobilePanel = "generate" | "viability";
 
 export default function Workspace() {
-  const { modelId, apiKey } = useByok();
+  const { modelId, apiKey, deepBrandSearch } = useByok();
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("generate");
   const [activeName, setActiveName] = useState<string | null>(null);
   const [result, setResult] = useState<AnalyzeNameResponse | null>(null);
@@ -66,6 +66,7 @@ export default function Workspace() {
           },
           abortRef.current.signal,
           apiKey ?? undefined,
+          apiKey ? deepBrandSearch : false,
         );
         setResult(data);
         setSeoError(capturedSeoError);
@@ -77,7 +78,7 @@ export default function Workspace() {
         setProgress(null);
       }
     },
-    [modelId, apiKey],
+    [modelId, apiKey, deepBrandSearch],
   );
 
   return (
@@ -143,6 +144,7 @@ export default function Workspace() {
             loading={loading}
             error={error}
             seoError={seoError}
+            deepBrandSearch={apiKey ? deepBrandSearch : false}
             onAnalyze={runAnalysis}
           />
         </div>

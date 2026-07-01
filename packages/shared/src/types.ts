@@ -9,6 +9,7 @@ export const AnalyzeNameRequestSchema = z.object({
   ),
   model: GeminiModelIdSchema.optional(),
   apiKey: z.string().min(10).optional(),
+  deepBrandSearch: z.boolean().optional(),
 });
 
 export type AnalyzeNameRequest = z.infer<typeof AnalyzeNameRequestSchema>;
@@ -77,3 +78,4 @@ export * from "./name-genres.js";
 export * from "./smart-pick.js";
 export * from "./gemini-models.js";
 export * from "./analyze-stream.js";
+export * from "./ai-errors.js";

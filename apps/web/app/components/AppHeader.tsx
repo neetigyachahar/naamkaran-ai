@@ -7,7 +7,7 @@ import { ByokDialog } from "./ByokDialog";
 import { LogoMark } from "./LogoMark";
 
 export function AppHeader() {
-  const { apiKey, isActive, modelId, setModelId, saveByok, clearByok } = useByok();
+  const { apiKey, isActive, modelId, deepBrandSearch, setModelId, saveByok, clearByok } = useByok();
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const selected = GEMINI_MODELS.find((model) => model.id === modelId);
@@ -85,6 +85,7 @@ export function AppHeader() {
         open={dialogOpen}
         initialKey={apiKey ?? ""}
         initialModelId={modelId}
+        initialDeepBrandSearch={deepBrandSearch}
         onClose={() => setDialogOpen(false)}
         onSave={saveByok}
         onClear={clearByok}

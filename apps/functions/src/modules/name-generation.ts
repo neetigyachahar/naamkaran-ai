@@ -3,6 +3,7 @@ import type { NameGenreId } from "@naamkaran/shared";
 import { DEFAULT_NAME_COUNT, resolveGeminiModelId, SMART_PICK_BATCH_SIZE } from "@naamkaran/shared";
 import { getGenreInstruction, resolveNameCount } from "../config/name-genres";
 import { getGeminiGenerateUrl } from "../lib/gemini";
+import { geminiApiError } from "../lib/gemini-api-error";
 import { geminiFetch } from "../lib/gemini-throttle";
 
 function buildSystemPrompt(
@@ -44,6 +45,7 @@ function buildSystemPrompt(
 
 ## Output rules (every response)
 - ${countRule}${smartPickNote}${excludeNote}
+- Length and syllable notes in the genre rules are recommendations only — choose what fits best.
 - Every name must be unique vs all names you suggested in earlier turns in this conversation.
 - Stay strictly within the genre pattern — reject ideas that drift into other genres.
 - If the user gives follow-up feedback, refine within the same genre rules.
@@ -99,20 +101,26 @@ export async function generateNames(
     parts: [{ text: msg.content }],
   }));
 
-  const response = await geminiFetch(`${getGeminiGenerateUrl(model)}?key=${apiKey}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents,
-      generationConfig: { responseMimeType: "application/json" },
-    }),
-    signal: AbortSignal.timeout(60_000),
-  });
+  const response = await geminiFetch(
+    `${getGeminiGenerateUrl(model)}?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents,
+        generationConfig: { responseMimeType: "application/json" },
+      }),
+      signal: AbortSignal.timeout(60_000),
+    },
+    { operation: "name_generate" },
+  );
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Gemini API error ${response.status}: ${body}`);
+    throw geminiApiError(`Gemini API error ${response.status}: ${body}`, "name_generate", {
+      httpStatus: response.status,
+    });
   }
 
   const data = (await response.json()) as {
@@ -123,7 +131,7 @@ export async function generateNames(
 
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) {
-    throw new Error("Gemini returned no content");
+    throw geminiApiError("Gemini returned no content", "name_generate", { code: "no_content" });
   }
 
   return parseResponse(text, nameCount);

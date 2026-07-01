@@ -10,6 +10,7 @@ export const AnalyzeStreamRequestSchema = z.object({
   ),
   model: GeminiModelIdSchema.optional(),
   apiKey: z.string().min(10).optional(),
+  deepBrandSearch: z.boolean().optional(),
 });
 
 export type AnalyzeStreamRequest = z.infer<typeof AnalyzeStreamRequestSchema>;

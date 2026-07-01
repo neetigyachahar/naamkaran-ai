@@ -3,6 +3,7 @@ import type {
   GenerateNamesRequest,
   GenerateNamesResponse,
 } from "@naamkaran/shared";
+import { postAiJson } from "./ai-client";
 
 export function getGenerateNamesUrl(): string {
   const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
@@ -35,16 +36,15 @@ export async function generateNames(
     payload.apiKey = apiKey;
   }
 
-  const response = await fetch(getGenerateNamesUrl(), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Name generation failed (${response.status})`);
-  }
-
-  return response.json() as Promise<GenerateNamesResponse>;
+  return postAiJson<GenerateNamesResponse>(
+    getGenerateNamesUrl(),
+    payload,
+    "name_generate",
+    {
+      modelId,
+      genreId: request.genreId,
+      hasByok: Boolean(apiKey),
+      smartPick: Boolean(request.smartPick),
+    },
+  );
 }

@@ -1,6 +1,6 @@
 import type { AnalyzeStreamEvent, GeminiModelId } from "@naamkaran/shared";
 import { resolveGeminiModelId } from "@naamkaran/shared";
-import { analysisCacheKey } from "../lib/gemini";
+import { analysisCacheKey, type BrandSearchMode } from "../lib/gemini";
 import { getCachedAnalysis, setCachedAnalysis } from "../lib/analysis-cache";
 import { analyzeNameWithProgress } from "../orchestrator";
 
@@ -12,9 +12,10 @@ export async function runAnalyzeStream(
   category: string | undefined,
   modelId: GeminiModelId | undefined,
   emit: Emit,
+  brandSearchMode: BrandSearchMode = "lite",
 ): Promise<void> {
   const model = resolveGeminiModelId(modelId);
-  const cacheKey = analysisCacheKey(name, model);
+  const cacheKey = analysisCacheKey(name, model, brandSearchMode);
   const cached = await getCachedAnalysis(cacheKey);
 
   if (cached) {
@@ -55,6 +56,7 @@ export async function runAnalyzeStream(
         }
       },
       model,
+      { brandSearchMode },
     );
 
     await setCachedAnalysis(cacheKey, result);

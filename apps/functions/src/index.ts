@@ -11,7 +11,7 @@ import type { AnalyzeStreamEvent } from "@naamkaran/shared";
 import type { SmartPickEvent } from "@naamkaran/shared";
 import { PUBLIC_CORS_OPTIONS, applyStreamCors } from "./config/cors";
 import { REGISTRATION_CHECK_ENABLED } from "./config/features";
-import { analysisCacheKey } from "./lib/gemini";
+import { analysisCacheKey, type BrandSearchMode } from "./lib/gemini";
 import { getCachedAnalysis, setCachedAnalysis } from "./lib/analysis-cache";
 import { runAnalyzeStream } from "./modules/analyze-stream";
 import { generateNames as runNameGeneration } from "./modules/name-generation";
@@ -47,6 +47,13 @@ function resolveAiKey(requestKey?: string): string {
   return serverKey;
 }
 
+function resolveBrandSearchMode(
+  requestApiKey?: string,
+  deepBrandSearch?: boolean,
+): BrandSearchMode {
+  return requestApiKey && deepBrandSearch ? "deep" : "lite";
+}
+
 function resolveAiKeyOrNull(requestKey?: string): string | null {
   if (requestKey) return requestKey;
   return googleAiKey.value() || null;
@@ -65,9 +72,10 @@ export const analyzeName = onCall(
       throw new HttpsError("invalid-argument", "Invalid request", parsed.error.flatten());
     }
 
-    const { name, category, model, apiKey: requestApiKey } = parsed.data;
+    const { name, category, model, apiKey: requestApiKey, deepBrandSearch } = parsed.data;
     const geminiModel = resolveGeminiModelId(model);
-    const cacheKey = analysisCacheKey(name, geminiModel);
+    const brandSearchMode = resolveBrandSearchMode(requestApiKey, deepBrandSearch);
+    const cacheKey = analysisCacheKey(name, geminiModel, brandSearchMode);
 
     const cached = await getCachedAnalysis(cacheKey);
     if (cached) return cached;
@@ -88,6 +96,7 @@ export const analyzeName = onCall(
         { googleAiKey: aiKey, dataGovKey: govKey },
         category,
         geminiModel,
+        brandSearchMode,
       );
 
       await setCachedAnalysis(cacheKey, result);
@@ -186,6 +195,7 @@ export const analyzeNameStream = onRequest(
       parsed.data.category,
       parsed.data.model,
       (event: AnalyzeStreamEvent) => writeSseEvent(res, event),
+      resolveBrandSearchMode(parsed.data.apiKey, parsed.data.deepBrandSearch),
     );
 
     res.end();

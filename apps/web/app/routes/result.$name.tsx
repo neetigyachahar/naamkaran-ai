@@ -20,7 +20,7 @@ export default function ResultPage() {
   const { name: nameParam } = useParams();
   const location = useLocation();
   const name = decodeURIComponent(nameParam ?? "");
-  const { modelId, apiKey } = useByok();
+  const { modelId, apiKey, deepBrandSearch } = useByok();
   const [result, setResult] = useState<AnalyzeNameResponse | null>(
     (location.state as { result?: AnalyzeNameResponse } | null)?.result ?? null,
   );
@@ -55,6 +55,7 @@ export default function ResultPage() {
           },
           abortRef.current.signal,
           apiKey ?? undefined,
+          apiKey ? deepBrandSearch : false,
         );
         setResult(data);
         setSeoError(capturedSeoError);
@@ -66,7 +67,7 @@ export default function ResultPage() {
         setProgress(null);
       }
     },
-    [modelId, apiKey],
+    [modelId, apiKey, deepBrandSearch],
   );
 
   useEffect(() => {
@@ -90,6 +91,7 @@ export default function ResultPage() {
           loading={loading}
           error={error}
           seoError={seoError}
+          deepBrandSearch={apiKey ? deepBrandSearch : false}
           onAnalyze={runAnalysis}
         />
       </div>
