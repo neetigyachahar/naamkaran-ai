@@ -1,5 +1,3 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # Dependencies
 node_modules
 .pnp
@@ -18,15 +16,20 @@ coverage
 # Turbo
 .turbo
 
-# Vercel
-.vercel
-
-# Build Outputs
+# Build outputs
 .next/
 out/
 build
 dist
 
+# Firebase
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+*.log
+
+# React Router
+.react-router/
 
 # Debug
 npm-debug.log*

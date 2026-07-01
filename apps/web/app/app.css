@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+html,
+body {
+  @apply bg-slate-100 text-slate-900 antialiased;
+}
+
+#root,
+body {
+  height: 100%;
+}
+
+html {
+  height: 100%;
+}
+
+.line-clamp-1 {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.genre-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+.genre-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.genre-scroll::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background-color: #cbd5e1;
+}

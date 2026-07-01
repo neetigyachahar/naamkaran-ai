@@ -1,0 +1,17 @@
+{
+  "projects": {
+    "default": "naamkaran-407d7"
+  },
+  "targets": {
+    "naamkaran-407d7": {
+      "hosting": {
+        "web": [
+          "naamkaran-ai"
+        ],
+        "default": [
+          "naamkaran-407d7"
+        ]
+      }
+    }
+  }
+}

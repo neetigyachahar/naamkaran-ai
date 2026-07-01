@@ -1,0 +1,62 @@
+{
+  "hosting": [
+    {
+      "target": "web",
+      "public": "apps/web/build/client",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
+      ],
+      "predeploy": [
+        "bun run --cwd apps/web build"
+      ]
+    },
+    {
+      "target": "default",
+      "public": "apps/web/build/client",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "source": "apps/functions",
+      "codebase": "default",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local",
+        "src"
+      ],
+      "predeploy": [
+        "sh -c 'cd \"$RESOURCE_DIR/../..\" && bun run build'"
+      ]
+    }
+  ],
+  "emulators": {
+    "functions": {
+      "port": 5001
+    },
+    "ui": {
+      "enabled": true
+    }
+  }
+}

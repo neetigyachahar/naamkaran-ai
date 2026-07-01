@@ -1,0 +1,22 @@
+{
+  "name": "functions",
+  "private": true,
+  "main": "lib/index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=lib/index.js --external:firebase-admin --external:firebase-functions",
+    "dev": "bun run build && firebase emulators:start --only functions --project naamkaran-407d7",
+    "lint": "node -e \"console.log('functions: no lint configured')\"",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.6.0",
+    "firebase-functions": "^6.6.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.2"
+  }
+}
