@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GeminiModelIdSchema } from "./gemini-models.js";
+import { OpenRouterModelIdSchema } from "./models.js";
 
 export const AnalyzeNameRequestSchema = z.object({
   name: z.string().min(1).max(100),
@@ -7,7 +7,7 @@ export const AnalyzeNameRequestSchema = z.object({
     (value) => (value === null || value === "" ? undefined : value),
     z.string().max(100).optional(),
   ),
-  model: GeminiModelIdSchema.optional(),
+  model: OpenRouterModelIdSchema.optional(),
   apiKey: z.string().min(10).optional(),
   deepBrandSearch: z.boolean().optional(),
 });
@@ -76,6 +76,6 @@ export type AnalyzeNameResponse = z.infer<typeof AnalyzeNameResponseSchema>;
 
 export * from "./name-genres.js";
 export * from "./smart-pick.js";
-export * from "./gemini-models.js";
+export * from "./models.js";
 export * from "./analyze-stream.js";
 export * from "./ai-errors.js";

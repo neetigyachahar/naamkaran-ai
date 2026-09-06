@@ -1,4 +1,4 @@
-import type { GeminiModelId } from "@naamkaran/shared";
+import type { OpenRouterModelId } from "@naamkaran/shared";
 import {
   createContext,
   useCallback,
@@ -13,17 +13,17 @@ import {
   loadDeepBrandSearch,
   saveDeepBrandSearch,
 } from "./brand-search-mode";
-import { loadGeminiModel, saveGeminiModel } from "./gemini-model";
+import { loadModel, saveModel } from "./model";
 import { AnalyticsEvents, trackEvent } from "./analytics";
 
 interface ByokContextValue {
   apiKey: string | null;
   isActive: boolean;
-  modelId: GeminiModelId;
+  modelId: OpenRouterModelId;
   deepBrandSearch: boolean;
-  setModelId: (modelId: GeminiModelId) => void;
+  setModelId: (modelId: OpenRouterModelId) => void;
   setDeepBrandSearch: (enabled: boolean) => void;
-  saveByok: (apiKey: string, modelId: GeminiModelId, deepBrandSearch: boolean) => void;
+  saveByok: (apiKey: string, modelId: OpenRouterModelId, deepBrandSearch: boolean) => void;
   clearByok: () => void;
 }
 
@@ -31,12 +31,12 @@ const ByokContext = createContext<ByokContextValue | null>(null);
 
 export function ByokProvider({ children }: { children: ReactNode }) {
   const [apiKey, setApiKey] = useState<string | null>(() => loadByokKey());
-  const [modelId, setModelIdState] = useState<GeminiModelId>(() => loadGeminiModel());
+  const [modelId, setModelIdState] = useState<OpenRouterModelId>(() => loadModel());
   const [deepBrandSearch, setDeepBrandSearchState] = useState<boolean>(() => loadDeepBrandSearch());
 
-  const setModelId = useCallback((nextModelId: GeminiModelId) => {
+  const setModelId = useCallback((nextModelId: OpenRouterModelId) => {
     setModelIdState(nextModelId);
-    saveGeminiModel(nextModelId);
+    saveModel(nextModelId);
   }, []);
 
   const setDeepBrandSearch = useCallback((enabled: boolean) => {
@@ -44,7 +44,7 @@ export function ByokProvider({ children }: { children: ReactNode }) {
     saveDeepBrandSearch(enabled);
   }, []);
 
-  const saveByok = useCallback((key: string, model: GeminiModelId, deepSearch: boolean) => {
+  const saveByok = useCallback((key: string, model: OpenRouterModelId, deepSearch: boolean) => {
     saveByokKey(key);
     setApiKey(key);
     setModelId(model);

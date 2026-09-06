@@ -1,6 +1,6 @@
-import type { ChatMessage, GeminiModelId, NameGenreId, SmartPickEvent } from "@naamkaran/shared";
+import type { ChatMessage, OpenRouterModelId, NameGenreId, SmartPickEvent } from "@naamkaran/shared";
 import {
-  resolveGeminiModelId,
+  resolveOpenRouterModelId,
   SMART_PICK_MAX_CANDIDATES,
   SMART_PICK_MIN_ACCEPTED,
   SMART_PICK_MIN_DOMAIN_SCORE,
@@ -18,9 +18,9 @@ export async function runSmartPickStream(
   apiKey: string,
   context: string | undefined,
   emit: Emit,
-  modelId?: GeminiModelId,
+  modelId?: OpenRouterModelId,
 ): Promise<void> {
-  const model = resolveGeminiModelId(modelId);
+  const model = resolveOpenRouterModelId(modelId);
   const tried = new Set<string>();
   const accepted: string[] = [];
   const rejected: string[] = [];
@@ -79,7 +79,7 @@ export async function runSmartPickStream(
     try {
       const result = await analyzeNameWithProgress(
         name,
-        { googleAiKey: apiKey },
+        { openRouterKey: apiKey },
         context,
         (step) => {
           if (step.type === "domain_start") {

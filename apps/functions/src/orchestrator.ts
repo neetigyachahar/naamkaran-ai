@@ -1,8 +1,8 @@
-import type { AnalyzeNameResponse, DomainCheckResult, GeminiModelId, SeoResult } from "@naamkaran/shared";
-import { resolveGeminiModelId } from "@naamkaran/shared";
+import type { AnalyzeNameResponse, DomainCheckResult, OpenRouterModelId, SeoResult } from "@naamkaran/shared";
+import { resolveOpenRouterModelId } from "@naamkaran/shared";
 import { REGISTRATION_CHECK_ENABLED } from "./config/features";
 import { ACTIVE_SCORE_WEIGHTS } from "./config/tlds";
-import { analysisCacheKey, type BrandSearchMode } from "./lib/gemini";
+import { analysisCacheKey, type BrandSearchMode } from "./lib/openrouter";
 import { getCachedAnalysis, setCachedAnalysis } from "./lib/analysis-cache";
 import { domainCheck } from "./modules/domain-check";
 import {
@@ -27,15 +27,15 @@ function computeCompositeScore(domainScore: number, seoScore: number): number {
 
 export async function analyzeName(
   name: string,
-  secrets: { googleAiKey: string; dataGovKey?: string },
+  secrets: { openRouterKey: string; dataGovKey?: string },
   category?: string,
-  modelId?: GeminiModelId,
+  modelId?: OpenRouterModelId,
   brandSearchMode: BrandSearchMode = "lite",
 ): Promise<AnalyzeNameResponse> {
-  const model = resolveGeminiModelId(modelId);
+  const model = resolveOpenRouterModelId(modelId);
   const [domain, seo] = await Promise.all([
     domainCheck(name),
-    seoCheck(name, secrets.googleAiKey, category, model, brandSearchMode),
+    seoCheck(name, secrets.openRouterKey, category, model, brandSearchMode),
   ]);
 
   const registration = REGISTRATION_CHECK_ENABLED
@@ -53,13 +53,13 @@ export async function analyzeName(
 
 export async function analyzeNameWithProgress(
   name: string,
-  secrets: { googleAiKey: string; dataGovKey?: string },
+  secrets: { openRouterKey: string; dataGovKey?: string },
   category: string | undefined,
   onProgress: (event: AnalysisProgressEvent) => void,
-  modelId?: GeminiModelId,
+  modelId?: OpenRouterModelId,
   options?: { skipSeoIfDomainBelow?: number; brandSearchMode?: BrandSearchMode },
 ): Promise<AnalyzeNameResponse> {
-  const model = resolveGeminiModelId(modelId);
+  const model = resolveOpenRouterModelId(modelId);
   const brandSearchMode = options?.brandSearchMode ?? "lite";
   const cacheKey = analysisCacheKey(name, model, brandSearchMode);
   const cached = await getCachedAnalysis(cacheKey);
@@ -96,7 +96,7 @@ export async function analyzeNameWithProgress(
   } else {
     onProgress({ type: "seo_start", name });
     try {
-      seo = await seoCheck(name, secrets.googleAiKey, category, model, brandSearchMode);
+      seo = await seoCheck(name, secrets.openRouterKey, category, model, brandSearchMode);
       onProgress({ type: "seo_done", name, seo });
     } catch {
       onProgress({ type: "seo_failed", name, message: "Brand search could not be completed." });
