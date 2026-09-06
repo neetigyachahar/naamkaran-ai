@@ -75,7 +75,10 @@ export const analyzeName = onCall(
     const { name, category, model, apiKey: requestApiKey, deepBrandSearch } = parsed.data;
     const geminiModel = resolveGeminiModelId(model);
     const brandSearchMode = resolveBrandSearchMode(requestApiKey, deepBrandSearch);
-    const cacheKey = analysisCacheKey(name, geminiModel, brandSearchMode);
+    const cat = category?.trim().toLowerCase() || "";
+    const cacheKey = cat
+      ? `${analysisCacheKey(name, geminiModel, brandSearchMode)}:cat:${cat}`
+      : analysisCacheKey(name, geminiModel, brandSearchMode);
 
     const cached = await getCachedAnalysis(cacheKey);
     if (cached) return cached;
@@ -205,7 +208,7 @@ export const analyzeNameStream = onRequest(
 export const smartPickStream = onRequest(
   {
     ...PUBLIC_CORS_OPTIONS,
-    secrets: [googleAiKey],
+    secrets,
     timeoutSeconds: 540,
     memory: "512MiB",
   },
@@ -229,6 +232,8 @@ export const smartPickStream = onRequest(
       return;
     }
 
+    const govKey = REGISTRATION_CHECK_ENABLED ? dataGovKey.value() : undefined;
+
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
@@ -242,6 +247,7 @@ export const smartPickStream = onRequest(
         parsed.data.context,
         (event) => writeSseEvent(res, event),
         parsed.data.model,
+        govKey,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Smart pick failed";

@@ -55,10 +55,35 @@ export const McaMatchSchema = z.object({
 
 export type McaMatch = z.infer<typeof McaMatchSchema>;
 
+export const McaVariantResultSchema = z.object({
+  query: z.string(),
+  kind: z.enum([
+    "bare",
+    "private_limited",
+    "llp",
+    "opc",
+    "limited",
+    "category",
+  ]),
+  label: z.string(),
+  available: z.union([z.boolean(), z.literal("unknown")]),
+  companyName: z.string().optional(),
+  cin: z.string().optional(),
+  status: z.string().optional(),
+});
+
+export type McaVariantResult = z.infer<typeof McaVariantResultSchema>;
+
 export const RegistrationResultSchema = z.object({
   score: z.number().min(0).max(100),
-  mcaMatches: z.array(McaMatchSchema),
+  /** @deprecated Prefer `variants` — kept for older cached payloads. */
+  mcaMatches: z.array(McaMatchSchema).default([]),
+  variants: z.array(McaVariantResultSchema).default([]),
   trademarkSearchUrl: z.string(),
+  note: z.string().optional(),
+  /** Core brand used for domains when input had a legal suffix. */
+  brandName: z.string().optional(),
+  isLegalName: z.boolean().optional(),
   disabled: z.boolean().optional(),
 });
 
@@ -79,3 +104,4 @@ export * from "./smart-pick.js";
 export * from "./gemini-models.js";
 export * from "./analyze-stream.js";
 export * from "./ai-errors.js";
+export * from "./mca-names.js";

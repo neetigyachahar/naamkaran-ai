@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChatMessage, NameGenreId } from "@naamkaran/shared";
+import type { AnalyzeNameResponse, ChatMessage, NameGenreId } from "@naamkaran/shared";
 import { DEFAULT_GENRE_ID, NAME_GENRES } from "@naamkaran/shared";
 import { generateNames } from "../lib/api-client";
 import { useByok } from "../lib/byok-context";
@@ -19,7 +19,7 @@ interface ChatTurn extends ChatMessage {
 }
 
 interface NameChatProps {
-  onNameSelect: (name: string) => void;
+  onNameSelect: (name: string, cachedResult?: AnalyzeNameResponse) => void;
   activeName: string | null;
 }
 

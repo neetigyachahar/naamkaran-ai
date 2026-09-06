@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { GeminiModelIdSchema } from "./gemini-models.js";
 import { ChatMessageSchema, NameGenreIdSchema } from "./name-genres.js";
+import type { AnalyzeNameResponse } from "./types.js";
 
 export const SMART_PICK_MIN_SCORE = 60;
 export const SMART_PICK_MIN_ACCEPTED = 3;
@@ -41,6 +42,8 @@ export type SmartPickEvent =
       score?: number;
     }
   | { type: "scored"; name: string; compositeScore: number }
+  /** Full viability payload so the UI can reuse it without re-analyzing. */
+  | { type: "analysis"; result: AnalyzeNameResponse }
   | { type: "accepted"; name: string; score: number }
   | { type: "rejected"; name: string; score: number }
   | {

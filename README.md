@@ -64,6 +64,7 @@ bun run deploy
 1. **Domain** — RDAP (IANA bootstrap) with WHOIS fallback
 2. **Brand uniqueness** — Gemini 2.5 Flash with Google Search grounding (multi-angle search)
 
-Composite score: domain 50% + brand 50%.
+Composite score: domain 35% + brand 35% + MCA name forms 30%.
 
-**Registration checks** (MCA / trademark) are implemented but disabled via `REGISTRATION_CHECK_ENABLED` in `apps/functions/src/config/features.ts`. Flip to `true` when ready.
+**Registration checks** (MCA company-name forms via data.gov.in) are enabled via
+`REGISTRATION_CHECK_ENABLED` in `apps/functions/src/config/features.ts`.

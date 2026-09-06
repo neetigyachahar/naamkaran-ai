@@ -1,5 +1,11 @@
-import type { AnalyzeNameResponse, DomainCheckResult, GeminiModelId, SeoResult } from "@naamkaran/shared";
-import { resolveGeminiModelId } from "@naamkaran/shared";
+import type {
+  AnalyzeNameResponse,
+  DomainCheckResult,
+  GeminiModelId,
+  RegistrationResult,
+  SeoResult,
+} from "@naamkaran/shared";
+import { parseBrandName, resolveGeminiModelId } from "@naamkaran/shared";
 import { REGISTRATION_CHECK_ENABLED } from "./config/features";
 import { ACTIVE_SCORE_WEIGHTS } from "./config/tlds";
 import { analysisCacheKey, type BrandSearchMode } from "./lib/gemini";
@@ -16,13 +22,35 @@ export type AnalysisProgressEvent =
   | { type: "domain_done"; name: string; domain: DomainCheckResult }
   | { type: "seo_start"; name: string }
   | { type: "seo_done"; name: string; seo: SeoResult }
-  | { type: "seo_failed"; name: string; message: string };
+  | { type: "seo_failed"; name: string; message: string }
+  | { type: "registration_start"; name: string }
+  | {
+      type: "registration_done";
+      name: string;
+      registration: RegistrationResult;
+    };
 
-function computeCompositeScore(domainScore: number, seoScore: number): number {
+function computeCompositeScore(
+  domainScore: number,
+  seoScore: number,
+  registrationScore: number,
+): number {
   const composite =
     domainScore * ACTIVE_SCORE_WEIGHTS.domain +
-    seoScore * ACTIVE_SCORE_WEIGHTS.seo;
+    seoScore * ACTIVE_SCORE_WEIGHTS.seo +
+    registrationScore * ACTIVE_SCORE_WEIGHTS.registration;
   return Math.round(composite);
+}
+
+function analysisCacheKeyWithCategory(
+  name: string,
+  modelId: GeminiModelId,
+  brandSearchMode: BrandSearchMode,
+  category?: string,
+): string {
+  const base = analysisCacheKey(name, modelId, brandSearchMode);
+  const cat = category?.trim().toLowerCase() || "";
+  return cat ? `${base}:cat:${cat}` : base;
 }
 
 export async function analyzeName(
@@ -33,18 +61,24 @@ export async function analyzeName(
   brandSearchMode: BrandSearchMode = "lite",
 ): Promise<AnalyzeNameResponse> {
   const model = resolveGeminiModelId(modelId);
+  const brandName = parseBrandName(name).brandName;
+
   const [domain, seo] = await Promise.all([
-    domainCheck(name),
-    seoCheck(name, secrets.googleAiKey, category, model, brandSearchMode),
+    domainCheck(brandName),
+    seoCheck(brandName, secrets.googleAiKey, category, model, brandSearchMode),
   ]);
 
   const registration = REGISTRATION_CHECK_ENABLED
-    ? await registrationCheck(name, secrets.dataGovKey!)
+    ? await registrationCheck(name, secrets.dataGovKey!, category)
     : disabledRegistrationResult(name);
 
   return {
     name,
-    compositeScore: computeCompositeScore(domain.score, seo.score),
+    compositeScore: computeCompositeScore(
+      domain.score,
+      seo.score,
+      registration.disabled ? 0 : registration.score,
+    ),
     domain,
     seo,
     registration,
@@ -61,7 +95,13 @@ export async function analyzeNameWithProgress(
 ): Promise<AnalyzeNameResponse> {
   const model = resolveGeminiModelId(modelId);
   const brandSearchMode = options?.brandSearchMode ?? "lite";
-  const cacheKey = analysisCacheKey(name, model, brandSearchMode);
+  const brandName = parseBrandName(name).brandName;
+  const cacheKey = analysisCacheKeyWithCategory(
+    name,
+    model,
+    brandSearchMode,
+    category,
+  );
   const cached = await getCachedAnalysis(cacheKey);
   if (cached) {
     onProgress({ type: "domain_start", name });
@@ -73,11 +113,19 @@ export async function analyzeNameWithProgress(
       onProgress({ type: "seo_start", name });
       onProgress({ type: "seo_done", name, seo: cached.seo });
     }
+    if (!cached.registration.disabled) {
+      onProgress({ type: "registration_start", name });
+      onProgress({
+        type: "registration_done",
+        name,
+        registration: cached.registration,
+      });
+    }
     return cached;
   }
 
   onProgress({ type: "domain_start", name });
-  const domain = await domainCheck(name);
+  const domain = await domainCheck(brandName);
   onProgress({ type: "domain_done", name, domain });
 
   const skipSeo =
@@ -96,10 +144,14 @@ export async function analyzeNameWithProgress(
   } else {
     onProgress({ type: "seo_start", name });
     try {
-      seo = await seoCheck(name, secrets.googleAiKey, category, model, brandSearchMode);
+      seo = await seoCheck(brandName, secrets.googleAiKey, category, model, brandSearchMode);
       onProgress({ type: "seo_done", name, seo });
     } catch {
-      onProgress({ type: "seo_failed", name, message: "Brand search could not be completed." });
+      onProgress({
+        type: "seo_failed",
+        name,
+        message: "Brand search could not be completed.",
+      });
       seo = {
         score: 0,
         isExistingBrand: false,
@@ -110,14 +162,32 @@ export async function analyzeNameWithProgress(
     }
   }
 
-  const registration =
-    skipSeo || !REGISTRATION_CHECK_ENABLED
-      ? disabledRegistrationResult(name)
-      : await registrationCheck(name, secrets.dataGovKey!);
+  let registration: RegistrationResult;
+  if (!REGISTRATION_CHECK_ENABLED || !secrets.dataGovKey) {
+    registration = disabledRegistrationResult(name);
+  } else {
+    onProgress({ type: "registration_start", name });
+    try {
+      registration = await registrationCheck(name, secrets.dataGovKey, category);
+    } catch {
+      registration = {
+        ...disabledRegistrationResult(name),
+        disabled: false,
+        score: 50,
+        note: "MCA lookup could not be completed.",
+        variants: [],
+      };
+    }
+    onProgress({ type: "registration_done", name, registration });
+  }
 
   const result: AnalyzeNameResponse = {
     name,
-    compositeScore: computeCompositeScore(domain.score, seo.score),
+    compositeScore: computeCompositeScore(
+      domain.score,
+      seo.score,
+      registration.disabled ? 0 : registration.score,
+    ),
     domain,
     seo,
     registration,

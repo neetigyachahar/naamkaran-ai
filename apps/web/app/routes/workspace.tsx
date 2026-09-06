@@ -36,13 +36,24 @@ export default function Workspace() {
   const abortRef = useRef<AbortController | null>(null);
 
   const runAnalysis = useCallback(
-    async (name: string, category?: string) => {
+    async (name: string, category?: string, cachedResult?: AnalyzeNameResponse) => {
       const trimmed = name.trim();
       if (!trimmed) return;
 
       setMobilePanel("viability");
-
       abortRef.current?.abort();
+
+      // Reuse Smart pick (or prior) analysis — no extra OpenRouter/MCA calls.
+      if (cachedResult) {
+        setActiveName(trimmed);
+        setLoading(false);
+        setError(null);
+        setSeoError(null);
+        setProgress(null);
+        setResult(cachedResult);
+        return;
+      }
+
       abortRef.current = new AbortController();
 
       setActiveName(trimmed);
@@ -79,6 +90,13 @@ export default function Workspace() {
       }
     },
     [modelId, apiKey, deepBrandSearch],
+  );
+
+  const onNameSelect = useCallback(
+    (name: string, cachedResult?: AnalyzeNameResponse) => {
+      void runAnalysis(name, undefined, cachedResult);
+    },
+    [runAnalysis],
   );
 
   return (
@@ -129,7 +147,7 @@ export default function Workspace() {
             mobilePanel === "generate" ? "flex" : "hidden lg:flex"
           }`}
         >
-          <NameChat onNameSelect={runAnalysis} activeName={activeName} />
+          <NameChat onNameSelect={onNameSelect} activeName={activeName} />
         </div>
 
         <div
@@ -145,7 +163,9 @@ export default function Workspace() {
             error={error}
             seoError={seoError}
             deepBrandSearch={apiKey ? deepBrandSearch : false}
-            onAnalyze={runAnalysis}
+            onAnalyze={(name, category) => {
+              void runAnalysis(name, category);
+            }}
           />
         </div>
       </div>

@@ -6,6 +6,17 @@ import { analyzeNameWithProgress } from "../orchestrator";
 
 type Emit = (event: AnalyzeStreamEvent) => void;
 
+function cacheKeyFor(
+  name: string,
+  model: GeminiModelId,
+  brandSearchMode: BrandSearchMode,
+  category?: string,
+): string {
+  const base = analysisCacheKey(name, model, brandSearchMode);
+  const cat = category?.trim().toLowerCase() || "";
+  return cat ? `${base}:cat:${cat}` : base;
+}
+
 export async function runAnalyzeStream(
   name: string,
   secrets: { googleAiKey: string; dataGovKey?: string },
@@ -15,7 +26,7 @@ export async function runAnalyzeStream(
   brandSearchMode: BrandSearchMode = "lite",
 ): Promise<void> {
   const model = resolveGeminiModelId(modelId);
-  const cacheKey = analysisCacheKey(name, model, brandSearchMode);
+  const cacheKey = cacheKeyFor(name, model, brandSearchMode, category);
   const cached = await getCachedAnalysis(cacheKey);
 
   if (cached) {
@@ -23,6 +34,15 @@ export async function runAnalyzeStream(
     emit({ type: "domain_check", name, status: "done", domain: cached.domain });
     emit({ type: "seo_check", name, status: "start" });
     emit({ type: "seo_check", name, status: "done", seo: cached.seo });
+    if (!cached.registration.disabled) {
+      emit({ type: "registration_check", name, status: "start" });
+      emit({
+        type: "registration_check",
+        name,
+        status: "done",
+        registration: cached.registration,
+      });
+    }
     emit({ type: "done", result: cached });
     return;
   }
@@ -53,6 +73,15 @@ export async function runAnalyzeStream(
           });
         } else if (step.type === "seo_failed") {
           emit({ type: "seo_error", name, message: step.message });
+        } else if (step.type === "registration_start") {
+          emit({ type: "registration_check", name, status: "start" });
+        } else if (step.type === "registration_done") {
+          emit({
+            type: "registration_check",
+            name,
+            status: "done",
+            registration: step.registration,
+          });
         }
       },
       model,

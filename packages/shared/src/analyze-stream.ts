@@ -1,5 +1,10 @@
 import { z } from "zod";
-import type { AnalyzeNameResponse, DomainCheckResult, SeoResult } from "./types.js";
+import type {
+  AnalyzeNameResponse,
+  DomainCheckResult,
+  RegistrationResult,
+  SeoResult,
+} from "./types.js";
 import { GeminiModelIdSchema } from "./gemini-models.js";
 
 export const AnalyzeStreamRequestSchema = z.object({
@@ -29,5 +34,11 @@ export type AnalyzeStreamEvent =
       seo?: SeoResult;
     }
   | { type: "seo_error"; name: string; message: string }
+  | {
+      type: "registration_check";
+      name: string;
+      status: "start" | "done";
+      registration?: RegistrationResult;
+    }
   | { type: "done"; result: AnalyzeNameResponse }
   | { type: "error"; message: string };

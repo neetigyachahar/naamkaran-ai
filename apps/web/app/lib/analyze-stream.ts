@@ -3,6 +3,7 @@ import type {
   AnalyzeNameResponse,
   DomainCheckResult,
   GeminiModelId,
+  RegistrationResult,
   SeoResult,
 } from "@naamkaran/shared";
 import type { AnalyzeStreamEvent } from "@naamkaran/shared";
@@ -23,10 +24,12 @@ export interface AnalyzeProgressState {
   name: string;
   domain: DomainCheckResult | null;
   seo: SeoResult | null;
+  registration: RegistrationResult | null;
   compositeScore: number | null;
   seoError: string | null;
   domainPending: boolean;
   seoPending: boolean;
+  registrationPending: boolean;
 }
 
 export const INITIAL_ANALYZE_PROGRESS = (
@@ -35,10 +38,12 @@ export const INITIAL_ANALYZE_PROGRESS = (
   name,
   domain: null,
   seo: null,
+  registration: null,
   compositeScore: null,
   seoError: null,
   domainPending: true,
   seoPending: false,
+  registrationPending: false,
 });
 
 function applyEvent(
@@ -64,7 +69,13 @@ function applyEvent(
         return { ...state, seoPending: true, seoError: null };
       }
       if (event.status === "done" && event.seo) {
-        return { ...state, seo: event.seo, seoPending: false, seoError: null };
+        return {
+          ...state,
+          seo: event.seo,
+          seoPending: false,
+          seoError: null,
+          registrationPending: true,
+        };
       }
       return state;
     case "seo_error":
@@ -72,15 +83,30 @@ function applyEvent(
         ...state,
         seoPending: false,
         seoError: event.message,
+        registrationPending: true,
       };
+    case "registration_check":
+      if (event.status === "start") {
+        return { ...state, registrationPending: true };
+      }
+      if (event.status === "done" && event.registration) {
+        return {
+          ...state,
+          registration: event.registration,
+          registrationPending: false,
+        };
+      }
+      return state;
     case "done":
       return {
         ...state,
         domain: event.result.domain,
         seo: event.result.seo,
+        registration: event.result.registration,
         compositeScore: event.result.compositeScore,
         domainPending: false,
         seoPending: false,
+        registrationPending: false,
       };
     default:
       return state;

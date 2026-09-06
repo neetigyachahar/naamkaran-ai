@@ -4174,6 +4174,105 @@ function classifyAiApiErrorCode(message) {
   return "unknown";
 }
 
+// ../../packages/shared/src/mca-names.ts
+var MCA_LEGAL_SUFFIXES = [
+  "OPC PRIVATE LIMITED",
+  "ONE PERSON COMPANY",
+  "PRIVATE LIMITED",
+  "PVT. LIMITED",
+  "PVT LIMITED",
+  "PVT. LTD.",
+  "PVT. LTD",
+  "PVT LTD.",
+  "PVT LTD",
+  "PUBLIC LIMITED",
+  "LIMITED",
+  "LTD.",
+  "LTD",
+  "LLP"
+];
+function collapseSpaces(value) {
+  return value.replace(/\s+/g, " ").trim();
+}
+function parseBrandName(raw) {
+  const input = collapseSpaces(raw);
+  const upper = input.toUpperCase();
+  for (const suffix of MCA_LEGAL_SUFFIXES) {
+    if (upper === suffix) {
+      return { input, brandName: input, isLegalName: true, matchedSuffix: suffix };
+    }
+    const token = ` ${suffix}`;
+    if (upper.endsWith(token)) {
+      const brandName = collapseSpaces(input.slice(0, input.length - token.length));
+      return {
+        input,
+        brandName: brandName || input,
+        isLegalName: true,
+        matchedSuffix: suffix
+      };
+    }
+  }
+  return { input, brandName: input, isLegalName: false, matchedSuffix: null };
+}
+var MCA_CATEGORY_TEMPLATES = {
+  fintech: ["FINTECH PRIVATE LIMITED", "FINANCIAL SERVICES PRIVATE LIMITED"],
+  "e-commerce": ["RETAIL PRIVATE LIMITED", "COMMERCE PRIVATE LIMITED"],
+  healthtech: ["HEALTHCARE PRIVATE LIMITED", "HEALTH PRIVATE LIMITED"],
+  edtech: ["EDUCATION PRIVATE LIMITED", "LEARNING PRIVATE LIMITED"],
+  saas: ["TECHNOLOGIES PRIVATE LIMITED", "SOFTWARE PRIVATE LIMITED"],
+  "food & beverage": ["FOODS PRIVATE LIMITED", "HOSPITALITY PRIVATE LIMITED"],
+  logistics: ["LOGISTICS PRIVATE LIMITED", "SUPPLY CHAIN PRIVATE LIMITED"],
+  "consumer apps": ["DIGITAL PRIVATE LIMITED", "APPS PRIVATE LIMITED"]
+};
+function toAllCapsBrand(brandName) {
+  return collapseSpaces(brandName).toUpperCase();
+}
+function buildMcaNameVariants(rawName, category) {
+  const parsed = parseBrandName(rawName);
+  const brand = toAllCapsBrand(parsed.brandName);
+  if (parsed.isLegalName) {
+    return [
+      {
+        query: toAllCapsBrand(parsed.input),
+        kind: "bare",
+        label: "As entered"
+      }
+    ];
+  }
+  if (!brand) return [];
+  const variants = [
+    { query: brand, kind: "bare", label: "Bare name" },
+    {
+      query: `${brand} PRIVATE LIMITED`,
+      kind: "private_limited",
+      label: "Private Limited"
+    },
+    { query: `${brand} LLP`, kind: "llp", label: "LLP" },
+    {
+      query: `${brand} OPC PRIVATE LIMITED`,
+      kind: "opc",
+      label: "OPC Private Limited"
+    },
+    { query: `${brand} LIMITED`, kind: "limited", label: "Limited" }
+  ];
+  const categoryKey = category?.trim().toLowerCase() ?? "";
+  const extras = MCA_CATEGORY_TEMPLATES[categoryKey] ?? [];
+  for (const suffix of extras.slice(0, 2)) {
+    variants.push({
+      query: `${brand} ${suffix}`,
+      kind: "category",
+      label: suffix
+    });
+  }
+  const seen = /* @__PURE__ */ new Set();
+  return variants.filter((v) => {
+    if (seen.has(v.query)) return false;
+    seen.add(v.query);
+    return true;
+  });
+}
+var MCA_CHECK_NOTE = "Other spellings, casing, or legal forms may still be registered with MCA.";
+
 // ../../packages/shared/src/types.ts
 var AnalyzeNameRequestSchema = external_exports.object({
   name: external_exports.string().min(1).max(100),
@@ -4211,10 +4310,32 @@ var McaMatchSchema = external_exports.object({
   cin: external_exports.string(),
   status: external_exports.string()
 });
+var McaVariantResultSchema = external_exports.object({
+  query: external_exports.string(),
+  kind: external_exports.enum([
+    "bare",
+    "private_limited",
+    "llp",
+    "opc",
+    "limited",
+    "category"
+  ]),
+  label: external_exports.string(),
+  available: external_exports.union([external_exports.boolean(), external_exports.literal("unknown")]),
+  companyName: external_exports.string().optional(),
+  cin: external_exports.string().optional(),
+  status: external_exports.string().optional()
+});
 var RegistrationResultSchema = external_exports.object({
   score: external_exports.number().min(0).max(100),
-  mcaMatches: external_exports.array(McaMatchSchema),
+  /** @deprecated Prefer `variants` — kept for older cached payloads. */
+  mcaMatches: external_exports.array(McaMatchSchema).default([]),
+  variants: external_exports.array(McaVariantResultSchema).default([]),
   trademarkSearchUrl: external_exports.string(),
+  note: external_exports.string().optional(),
+  /** Core brand used for domains when input had a legal suffix. */
+  brandName: external_exports.string().optional(),
+  isLegalName: external_exports.boolean().optional(),
   disabled: external_exports.boolean().optional()
 });
 var AnalyzeNameResponseSchema = external_exports.object({
@@ -4252,7 +4373,7 @@ function applyStreamCors(req, res) {
 }
 
 // src/config/features.ts
-var REGISTRATION_CHECK_ENABLED = false;
+var REGISTRATION_CHECK_ENABLED = true;
 
 // src/lib/gemini.ts
 function getGeminiGenerateUrl(modelId) {
@@ -4525,110 +4646,110 @@ async function domainCheck(name) {
 }
 
 // src/modules/registration-check.ts
-function getField(record, ...keys) {
-  for (const key of keys) {
-    const value = record[key];
-    if (value != null && String(value).trim()) {
-      return String(value).trim();
-    }
-  }
-  return "";
-}
-function normalizeCompanyName(name) {
-  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-function toMcaMatch(record) {
-  return {
-    companyName: getField(record, "company_name", "COMPANY_NAME") || "Unknown",
-    cin: getField(
-      record,
-      "cin",
-      "CIN",
-      "corporate_identification_number",
-      "CORPORATEIDENTIFICATIONNUMBER"
-    ),
-    status: getField(record, "company_status", "COMPANY_STATUS", "status") || "Unknown"
-  };
-}
-function classifyMatches(searchName, records) {
-  const normalizedSearch = normalizeCompanyName(searchName);
-  const exact = [];
-  const partial = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const record of records) {
-    const match = toMcaMatch(record);
-    if (!match.companyName || seen.has(match.cin || match.companyName)) continue;
-    seen.add(match.cin || match.companyName);
-    const normalizedCompany = normalizeCompanyName(match.companyName);
-    if (normalizedCompany === normalizedSearch) {
-      exact.push(match);
-    } else if (normalizedCompany.includes(normalizedSearch) || normalizedSearch.includes(normalizedCompany)) {
-      partial.push(match);
-    }
-  }
-  return { exact, partial };
-}
-function computeRegistrationScore(exactCount, partialCount) {
-  const score = 100 - exactCount * 40 - partialCount * 15;
-  return Math.max(0, Math.round(score));
+var REQUEST_GAP_MS = 150;
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 function buildTrademarkSearchUrl(name) {
   const encoded = encodeURIComponent(name.trim());
   return `${TRADEMARK_SEARCH_BASE_URL}?wordmark=${encoded}`;
 }
-async function fetchMcaRecords(name, apiKey) {
-  const filterFields = ["company_name", "COMPANY_NAME"];
-  const allRecords = [];
-  for (const field of filterFields) {
-    const url = new URL(
-      `https://api.data.gov.in/resource/${COMPANY_MASTER_DATA_RESOURCE_ID}`
-    );
-    url.searchParams.set("api-key", apiKey);
-    url.searchParams.set("format", "json");
-    url.searchParams.set("limit", "50");
-    url.searchParams.set(`filters[${field}]`, name);
+function recordCompanyName(record) {
+  return (record.CompanyName || record.company_name || record.COMPANY_NAME || "").trim();
+}
+function recordCin(record) {
+  return (record.CIN || record.cin || "").trim();
+}
+function recordStatus(record) {
+  return (record.CompanyStatus || record.status || "Unknown").trim();
+}
+function toMcaMatch(record) {
+  const companyName = recordCompanyName(record);
+  if (!companyName) return null;
+  return {
+    companyName,
+    cin: recordCin(record),
+    status: recordStatus(record)
+  };
+}
+async function lookupExactCompanyName(query, apiKey) {
+  const url = new URL(
+    `https://api.data.gov.in/resource/${COMPANY_MASTER_DATA_RESOURCE_ID}`
+  );
+  url.searchParams.set("api-key", apiKey);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("limit", "10");
+  url.searchParams.set("filters[CompanyName]", query);
+  try {
     const response = await fetch(url.toString(), {
       signal: AbortSignal.timeout(15e3)
     });
-    if (!response.ok) continue;
+    if (!response.ok) {
+      return { available: "unknown" };
+    }
     const data = await response.json();
     const records = data.records ?? data.data ?? [];
-    allRecords.push(...records);
+    if (records.length === 0) {
+      return { available: true };
+    }
+    const match = toMcaMatch(records[0]);
+    return match ? { available: false, match } : { available: false };
+  } catch {
+    return { available: "unknown" };
   }
-  if (allRecords.length > 0) {
-    return allRecords;
-  }
-  const fallbackUrl = new URL(
-    `https://api.data.gov.in/resource/${COMPANY_MASTER_DATA_RESOURCE_ID}`
-  );
-  fallbackUrl.searchParams.set("api-key", apiKey);
-  fallbackUrl.searchParams.set("format", "json");
-  fallbackUrl.searchParams.set("limit", "100");
-  fallbackUrl.searchParams.set("q", name);
-  const fallbackResponse = await fetch(fallbackUrl.toString(), {
-    signal: AbortSignal.timeout(15e3)
-  });
-  if (!fallbackResponse.ok) {
-    return [];
-  }
-  const fallbackData = await fallbackResponse.json();
-  return fallbackData.records ?? fallbackData.data ?? [];
 }
-async function registrationCheck(name, apiKey) {
-  const records = await fetchMcaRecords(name, apiKey);
-  const { exact, partial } = classifyMatches(name, records);
-  const mcaMatches = [...exact, ...partial];
+function computeRegistrationScore(variants) {
+  if (variants.length === 0) return 50;
+  let weightSum = 0;
+  let earned = 0;
+  for (const variant of variants) {
+    const weight = variant.kind === "private_limited" || variant.kind === "bare" ? 2 : variant.kind === "limited" ? 0.5 : 1;
+    weightSum += weight;
+    if (variant.available === true) earned += weight;
+    else if (variant.available === "unknown") earned += weight * 0.4;
+  }
+  return Math.round(earned / weightSum * 100);
+}
+async function registrationCheck(name, apiKey, category) {
+  const parsed = parseBrandName(name);
+  const variantSpecs = buildMcaNameVariants(name, category);
+  const variants = [];
+  const mcaMatches = [];
+  for (let i = 0; i < variantSpecs.length; i++) {
+    const spec = variantSpecs[i];
+    if (i > 0) await sleep(REQUEST_GAP_MS);
+    const result = await lookupExactCompanyName(spec.query, apiKey);
+    const row = {
+      query: spec.query,
+      kind: spec.kind,
+      label: spec.label,
+      available: result.available,
+      companyName: result.match?.companyName,
+      cin: result.match?.cin,
+      status: result.match?.status
+    };
+    variants.push(row);
+    if (result.match) mcaMatches.push(result.match);
+  }
   return {
-    score: computeRegistrationScore(exact.length, partial.length),
+    score: computeRegistrationScore(variants),
     mcaMatches,
-    trademarkSearchUrl: buildTrademarkSearchUrl(name)
+    variants,
+    trademarkSearchUrl: buildTrademarkSearchUrl(parsed.brandName),
+    note: MCA_CHECK_NOTE,
+    brandName: parsed.brandName,
+    isLegalName: parsed.isLegalName
   };
 }
 function disabledRegistrationResult(name) {
+  const parsed = parseBrandName(name);
   return {
     score: 0,
     mcaMatches: [],
-    trademarkSearchUrl: buildTrademarkSearchUrl(name),
+    variants: [],
+    trademarkSearchUrl: buildTrademarkSearchUrl(parsed.brandName),
+    brandName: parsed.brandName,
+    isLegalName: parsed.isLegalName,
     disabled: true
   };
 }
@@ -4666,7 +4787,7 @@ function wrapGeminiFailure(error, operation) {
 var MIN_GAP_MS = 4e3;
 var lastCallAt = 0;
 var chain = Promise.resolve();
-function sleep(ms) {
+function sleep2(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 function parseRetryDelayMs(body) {
@@ -4688,7 +4809,7 @@ async function waitForGeminiSlot() {
   chain = chain.then(async () => {
     const elapsed = Date.now() - lastCallAt;
     if (elapsed < MIN_GAP_MS) {
-      await sleep(MIN_GAP_MS - elapsed);
+      await sleep2(MIN_GAP_MS - elapsed);
     }
     lastCallAt = Date.now();
   });
@@ -4705,7 +4826,7 @@ async function geminiFetch(url, init, options) {
       }
       const body = await response.text();
       const retryMs = parseRetryDelayMs(body) ?? MIN_GAP_MS * (attempt + 1);
-      await sleep(retryMs);
+      await sleep2(retryMs);
     }
     throw geminiApiError("Gemini API rate limit exceeded after retries", operation, {
       code: "rate_limit",
@@ -5075,20 +5196,30 @@ async function seoCheck(name, apiKey, category, modelId, mode = "lite") {
 }
 
 // src/orchestrator.ts
-function computeCompositeScore(domainScore, seoScore) {
-  const composite = domainScore * ACTIVE_SCORE_WEIGHTS.domain + seoScore * ACTIVE_SCORE_WEIGHTS.seo;
+function computeCompositeScore(domainScore, seoScore, registrationScore) {
+  const composite = domainScore * ACTIVE_SCORE_WEIGHTS.domain + seoScore * ACTIVE_SCORE_WEIGHTS.seo + registrationScore * ACTIVE_SCORE_WEIGHTS.registration;
   return Math.round(composite);
+}
+function analysisCacheKeyWithCategory(name, modelId, brandSearchMode, category) {
+  const base = analysisCacheKey(name, modelId, brandSearchMode);
+  const cat = category?.trim().toLowerCase() || "";
+  return cat ? `${base}:cat:${cat}` : base;
 }
 async function analyzeName(name, secrets2, category, modelId, brandSearchMode = "lite") {
   const model = resolveGeminiModelId(modelId);
+  const brandName = parseBrandName(name).brandName;
   const [domain, seo] = await Promise.all([
-    domainCheck(name),
-    seoCheck(name, secrets2.googleAiKey, category, model, brandSearchMode)
+    domainCheck(brandName),
+    seoCheck(brandName, secrets2.googleAiKey, category, model, brandSearchMode)
   ]);
-  const registration = REGISTRATION_CHECK_ENABLED ? await registrationCheck(name, secrets2.dataGovKey) : disabledRegistrationResult(name);
+  const registration = REGISTRATION_CHECK_ENABLED ? await registrationCheck(name, secrets2.dataGovKey, category) : disabledRegistrationResult(name);
   return {
     name,
-    compositeScore: computeCompositeScore(domain.score, seo.score),
+    compositeScore: computeCompositeScore(
+      domain.score,
+      seo.score,
+      registration.disabled ? 0 : registration.score
+    ),
     domain,
     seo,
     registration
@@ -5097,7 +5228,13 @@ async function analyzeName(name, secrets2, category, modelId, brandSearchMode = 
 async function analyzeNameWithProgress(name, secrets2, category, onProgress, modelId, options) {
   const model = resolveGeminiModelId(modelId);
   const brandSearchMode = options?.brandSearchMode ?? "lite";
-  const cacheKey = analysisCacheKey(name, model, brandSearchMode);
+  const brandName = parseBrandName(name).brandName;
+  const cacheKey = analysisCacheKeyWithCategory(
+    name,
+    model,
+    brandSearchMode,
+    category
+  );
   const cached = await getCachedAnalysis(cacheKey);
   if (cached) {
     onProgress({ type: "domain_start", name });
@@ -5107,10 +5244,18 @@ async function analyzeNameWithProgress(name, secrets2, category, onProgress, mod
       onProgress({ type: "seo_start", name });
       onProgress({ type: "seo_done", name, seo: cached.seo });
     }
+    if (!cached.registration.disabled) {
+      onProgress({ type: "registration_start", name });
+      onProgress({
+        type: "registration_done",
+        name,
+        registration: cached.registration
+      });
+    }
     return cached;
   }
   onProgress({ type: "domain_start", name });
-  const domain = await domainCheck(name);
+  const domain = await domainCheck(brandName);
   onProgress({ type: "domain_done", name, domain });
   const skipSeo = options?.skipSeoIfDomainBelow != null && domain.score < options.skipSeoIfDomainBelow;
   let seo;
@@ -5125,10 +5270,14 @@ async function analyzeNameWithProgress(name, secrets2, category, onProgress, mod
   } else {
     onProgress({ type: "seo_start", name });
     try {
-      seo = await seoCheck(name, secrets2.googleAiKey, category, model, brandSearchMode);
+      seo = await seoCheck(brandName, secrets2.googleAiKey, category, model, brandSearchMode);
       onProgress({ type: "seo_done", name, seo });
     } catch {
-      onProgress({ type: "seo_failed", name, message: "Brand search could not be completed." });
+      onProgress({
+        type: "seo_failed",
+        name,
+        message: "Brand search could not be completed."
+      });
       seo = {
         score: 0,
         isExistingBrand: false,
@@ -5138,10 +5287,31 @@ async function analyzeNameWithProgress(name, secrets2, category, onProgress, mod
       };
     }
   }
-  const registration = skipSeo || !REGISTRATION_CHECK_ENABLED ? disabledRegistrationResult(name) : await registrationCheck(name, secrets2.dataGovKey);
+  let registration;
+  if (!REGISTRATION_CHECK_ENABLED || !secrets2.dataGovKey) {
+    registration = disabledRegistrationResult(name);
+  } else {
+    onProgress({ type: "registration_start", name });
+    try {
+      registration = await registrationCheck(name, secrets2.dataGovKey, category);
+    } catch {
+      registration = {
+        ...disabledRegistrationResult(name),
+        disabled: false,
+        score: 50,
+        note: "MCA lookup could not be completed.",
+        variants: []
+      };
+    }
+    onProgress({ type: "registration_done", name, registration });
+  }
   const result = {
     name,
-    compositeScore: computeCompositeScore(domain.score, seo.score),
+    compositeScore: computeCompositeScore(
+      domain.score,
+      seo.score,
+      registration.disabled ? 0 : registration.score
+    ),
     domain,
     seo,
     registration
@@ -5151,15 +5321,29 @@ async function analyzeNameWithProgress(name, secrets2, category, onProgress, mod
 }
 
 // src/modules/analyze-stream.ts
+function cacheKeyFor(name, model, brandSearchMode, category) {
+  const base = analysisCacheKey(name, model, brandSearchMode);
+  const cat = category?.trim().toLowerCase() || "";
+  return cat ? `${base}:cat:${cat}` : base;
+}
 async function runAnalyzeStream(name, secrets2, category, modelId, emit, brandSearchMode = "lite") {
   const model = resolveGeminiModelId(modelId);
-  const cacheKey = analysisCacheKey(name, model, brandSearchMode);
+  const cacheKey = cacheKeyFor(name, model, brandSearchMode, category);
   const cached = await getCachedAnalysis(cacheKey);
   if (cached) {
     emit({ type: "domain_check", name, status: "start" });
     emit({ type: "domain_check", name, status: "done", domain: cached.domain });
     emit({ type: "seo_check", name, status: "start" });
     emit({ type: "seo_check", name, status: "done", seo: cached.seo });
+    if (!cached.registration.disabled) {
+      emit({ type: "registration_check", name, status: "start" });
+      emit({
+        type: "registration_check",
+        name,
+        status: "done",
+        registration: cached.registration
+      });
+    }
     emit({ type: "done", result: cached });
     return;
   }
@@ -5189,6 +5373,15 @@ async function runAnalyzeStream(name, secrets2, category, modelId, emit, brandSe
           });
         } else if (step.type === "seo_failed") {
           emit({ type: "seo_error", name, message: step.message });
+        } else if (step.type === "registration_start") {
+          emit({ type: "registration_check", name, status: "start" });
+        } else if (step.type === "registration_done") {
+          emit({
+            type: "registration_check",
+            name,
+            status: "done",
+            registration: step.registration
+          });
         }
       },
       model,
@@ -5557,7 +5750,7 @@ async function generateNames(genreId, messages, apiKey, context, smartPick, excl
 }
 
 // src/modules/smart-pick-stream.ts
-async function runSmartPickStream(genreId, messages, apiKey, context, emit, modelId) {
+async function runSmartPickStream(genreId, messages, apiKey, context, emit, modelId, dataGovKey2) {
   const model = resolveGeminiModelId(modelId);
   const tried = /* @__PURE__ */ new Set();
   const accepted = [];
@@ -5600,7 +5793,7 @@ async function runSmartPickStream(genreId, messages, apiKey, context, emit, mode
     try {
       const result = await analyzeNameWithProgress(
         name,
-        { googleAiKey: apiKey },
+        { googleAiKey: apiKey, dataGovKey: dataGovKey2 },
         context,
         (step) => {
           if (step.type === "domain_start") {
@@ -5629,6 +5822,7 @@ async function runSmartPickStream(genreId, messages, apiKey, context, emit, mode
       const score = result.compositeScore;
       const skippedBrandSearch = result.domain.score < SMART_PICK_MIN_DOMAIN_SCORE;
       nameScores[name] = score;
+      emit({ type: "analysis", result });
       if (!skippedBrandSearch) {
         emit({ type: "scored", name, compositeScore: score });
       }
@@ -5699,7 +5893,8 @@ var analyzeName2 = (0, import_https.onCall)(
     const { name, category, model, apiKey: requestApiKey, deepBrandSearch } = parsed.data;
     const geminiModel = resolveGeminiModelId(model);
     const brandSearchMode = resolveBrandSearchMode(requestApiKey, deepBrandSearch);
-    const cacheKey = analysisCacheKey(name, geminiModel, brandSearchMode);
+    const cat = category?.trim().toLowerCase() || "";
+    const cacheKey = cat ? `${analysisCacheKey(name, geminiModel, brandSearchMode)}:cat:${cat}` : analysisCacheKey(name, geminiModel, brandSearchMode);
     const cached = await getCachedAnalysis(cacheKey);
     if (cached) return cached;
     const aiKey = resolveAiKey(requestApiKey);
@@ -5809,7 +6004,7 @@ var analyzeNameStream = (0, import_https.onRequest)(
 var smartPickStream = (0, import_https.onRequest)(
   {
     ...PUBLIC_CORS_OPTIONS,
-    secrets: [googleAiKey],
+    secrets,
     timeoutSeconds: 540,
     memory: "512MiB"
   },
@@ -5829,6 +6024,7 @@ var smartPickStream = (0, import_https.onRequest)(
       res.status(500).json({ error: "GOOGLE_AI_STUDIO_KEY is not configured" });
       return;
     }
+    const govKey = REGISTRATION_CHECK_ENABLED ? dataGovKey.value() : void 0;
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
@@ -5840,7 +6036,8 @@ var smartPickStream = (0, import_https.onRequest)(
         aiKey,
         parsed.data.context,
         (event) => writeSseEvent(res, event),
-        parsed.data.model
+        parsed.data.model,
+        govKey
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Smart pick failed";

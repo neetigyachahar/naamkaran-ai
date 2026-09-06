@@ -19,6 +19,7 @@ export async function runSmartPickStream(
   context: string | undefined,
   emit: Emit,
   modelId?: GeminiModelId,
+  dataGovKey?: string,
 ): Promise<void> {
   const model = resolveGeminiModelId(modelId);
   const tried = new Set<string>();
@@ -79,7 +80,7 @@ export async function runSmartPickStream(
     try {
       const result = await analyzeNameWithProgress(
         name,
-        { googleAiKey: apiKey },
+        { googleAiKey: apiKey, dataGovKey },
         context,
         (step) => {
           if (step.type === "domain_start") {
@@ -109,6 +110,8 @@ export async function runSmartPickStream(
       const score = result.compositeScore;
       const skippedBrandSearch = result.domain.score < SMART_PICK_MIN_DOMAIN_SCORE;
       nameScores[name] = score;
+
+      emit({ type: "analysis", result });
 
       if (!skippedBrandSearch) {
         emit({ type: "scored", name, compositeScore: score });

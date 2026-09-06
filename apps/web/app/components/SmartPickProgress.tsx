@@ -1,5 +1,7 @@
+import type { AnalyzeNameResponse } from "@naamkaran/shared";
 import type { SmartPickState, PickPhase } from "../lib/smart-pick";
 import {
+  getSmartPickAnalysis,
   SMART_PICK_MIN_SCORE,
   SMART_PICK_REVEAL_COUNT,
 } from "../lib/smart-pick";
@@ -7,7 +9,7 @@ import {
 interface SmartPickProgressProps {
   state: SmartPickState;
   activeName: string | null;
-  onNameSelect: (name: string) => void;
+  onNameSelect: (name: string, cachedResult?: AnalyzeNameResponse) => void;
 }
 
 const STEPS: { phase: PickPhase; label: string }[] = [
@@ -74,14 +76,36 @@ function AcceptedChip({
   );
 }
 
-function RejectedChip({ name, score }: { name: string; score: number }) {
+function RejectedChip({
+  name,
+  score,
+  active,
+  onSelect,
+}: {
+  name: string;
+  score: number;
+  active: boolean;
+  onSelect: () => void;
+}) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 ring-1 ring-rose-200 sm:text-sm">
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition sm:text-sm ${
+        active
+          ? "bg-indigo-600 text-white shadow-sm"
+          : "bg-rose-50 text-rose-700 ring-1 ring-rose-200 hover:bg-rose-100"
+      }`}
+    >
       <span>{name}</span>
-      <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-600">
+      <span
+        className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+          active ? "bg-indigo-500 text-white" : "bg-rose-100 text-rose-600"
+        }`}
+      >
         {score}
       </span>
-    </span>
+    </button>
   );
 }
 
@@ -198,7 +222,9 @@ export function SmartPickProgress({
                     name={name}
                     score={score}
                     active={activeName === name}
-                    onSelect={() => onNameSelect(name)}
+                    onSelect={() =>
+                      onNameSelect(name, getSmartPickAnalysis(state, name))
+                    }
                   />
                 ))}
               </div>
@@ -215,7 +241,15 @@ export function SmartPickProgress({
               </p>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {rejected.map(({ name, score }) => (
-                  <RejectedChip key={name} name={name} score={score} />
+                  <RejectedChip
+                    key={name}
+                    name={name}
+                    score={score}
+                    active={activeName === name}
+                    onSelect={() =>
+                      onNameSelect(name, getSmartPickAnalysis(state, name))
+                    }
+                  />
                 ))}
               </div>
             </div>

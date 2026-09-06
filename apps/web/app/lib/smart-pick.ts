@@ -1,4 +1,9 @@
-import type { GeminiModelId, SmartPickEvent, SmartPickRequest } from "@naamkaran/shared";
+import type {
+  AnalyzeNameResponse,
+  GeminiModelId,
+  SmartPickEvent,
+  SmartPickRequest,
+} from "@naamkaran/shared";
 import {
   SMART_PICK_MIN_ACCEPTED,
   SMART_PICK_MIN_SCORE,
@@ -34,6 +39,8 @@ export interface SmartPickState {
   reply?: string;
   accepted: ScoredNameEntry[];
   rejected: ScoredNameEntry[];
+  /** Full analyze payloads keyed by name (case-sensitive as returned). */
+  analyses: Record<string, AnalyzeNameResponse>;
   activeName: string | null;
   activePhase: PickPhase;
   activeDomainScore: number | null;
@@ -48,6 +55,7 @@ export interface SmartPickState {
 export const INITIAL_SMART_PICK_STATE: SmartPickState = {
   accepted: [],
   rejected: [],
+  analyses: {},
   activeName: null,
   activePhase: "idle",
   activeDomainScore: null,
@@ -72,6 +80,15 @@ function clearActive(state: SmartPickState): SmartPickState {
     activeSeoScore: null,
     activeCompositeScore: null,
   };
+}
+
+export function getSmartPickAnalysis(
+  state: SmartPickState,
+  name: string,
+): AnalyzeNameResponse | undefined {
+  if (state.analyses[name]) return state.analyses[name];
+  const lower = name.toLowerCase();
+  return Object.entries(state.analyses).find(([key]) => key.toLowerCase() === lower)?.[1];
 }
 
 function applyEvent(state: SmartPickState, event: SmartPickEvent): SmartPickState {
@@ -109,6 +126,14 @@ function applyEvent(state: SmartPickState, event: SmartPickEvent): SmartPickStat
         ...state,
         activePhase: "scoring",
         activeCompositeScore: event.compositeScore,
+      };
+    case "analysis":
+      return {
+        ...state,
+        analyses: {
+          ...state.analyses,
+          [event.result.name]: event.result,
+        },
       };
     case "accepted":
       return {

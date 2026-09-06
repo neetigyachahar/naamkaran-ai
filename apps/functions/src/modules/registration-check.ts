@@ -1,86 +1,36 @@
-import type { McaMatch, RegistrationResult } from "@naamkaran/shared";
+import type { McaMatch, McaVariantResult, RegistrationResult } from "@naamkaran/shared";
+import {
+  MCA_CHECK_NOTE,
+  buildMcaNameVariants,
+  parseBrandName,
+} from "@naamkaran/shared";
 import {
   COMPANY_MASTER_DATA_RESOURCE_ID,
   TRADEMARK_SEARCH_BASE_URL,
 } from "../config/tlds";
 
 interface DataGovRecord {
+  CompanyName?: string;
+  CIN?: string;
+  CompanyStatus?: string;
   company_name?: string;
   COMPANY_NAME?: string;
   cin?: string;
-  CIN?: string;
-  corporate_identification_number?: string;
-  CORPORATEIDENTIFICATIONNUMBER?: string;
-  company_status?: string;
-  COMPANY_STATUS?: string;
   status?: string;
 }
 
 interface DataGovResponse {
   records?: DataGovRecord[];
   data?: DataGovRecord[];
+  count?: number | string;
+  total?: number | string;
+  status?: string;
 }
 
-function getField(record: DataGovRecord, ...keys: string[]): string {
-  for (const key of keys) {
-    const value = record[key as keyof DataGovRecord];
-    if (value != null && String(value).trim()) {
-      return String(value).trim();
-    }
-  }
-  return "";
-}
+const REQUEST_GAP_MS = 150;
 
-function normalizeCompanyName(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function toMcaMatch(record: DataGovRecord): McaMatch {
-  return {
-    companyName:
-      getField(record, "company_name", "COMPANY_NAME") || "Unknown",
-    cin: getField(
-      record,
-      "cin",
-      "CIN",
-      "corporate_identification_number",
-      "CORPORATEIDENTIFICATIONNUMBER",
-    ),
-    status: getField(record, "company_status", "COMPANY_STATUS", "status") || "Unknown",
-  };
-}
-
-function classifyMatches(
-  searchName: string,
-  records: DataGovRecord[],
-): { exact: McaMatch[]; partial: McaMatch[] } {
-  const normalizedSearch = normalizeCompanyName(searchName);
-  const exact: McaMatch[] = [];
-  const partial: McaMatch[] = [];
-  const seen = new Set<string>();
-
-  for (const record of records) {
-    const match = toMcaMatch(record);
-    if (!match.companyName || seen.has(match.cin || match.companyName)) continue;
-    seen.add(match.cin || match.companyName);
-
-    const normalizedCompany = normalizeCompanyName(match.companyName);
-    if (normalizedCompany === normalizedSearch) {
-      exact.push(match);
-    } else if (
-      normalizedCompany.includes(normalizedSearch) ||
-      normalizedSearch.includes(normalizedCompany)
-    ) {
-      partial.push(match);
-    }
-  }
-
-  return { exact, partial };
-}
-
-function computeRegistrationScore(exactCount: number, partialCount: number): number {
-  const score = 100 - exactCount * 40 - partialCount * 15;
-  return Math.max(0, Math.round(score));
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function buildTrademarkSearchUrl(name: string): string {
@@ -88,77 +38,139 @@ function buildTrademarkSearchUrl(name: string): string {
   return `${TRADEMARK_SEARCH_BASE_URL}?wordmark=${encoded}`;
 }
 
-async function fetchMcaRecords(
-  name: string,
+function recordCompanyName(record: DataGovRecord): string {
+  return (
+    record.CompanyName ||
+    record.company_name ||
+    record.COMPANY_NAME ||
+    ""
+  ).trim();
+}
+
+function recordCin(record: DataGovRecord): string {
+  return (record.CIN || record.cin || "").trim();
+}
+
+function recordStatus(record: DataGovRecord): string {
+  return (record.CompanyStatus || record.status || "Unknown").trim();
+}
+
+function toMcaMatch(record: DataGovRecord): McaMatch | null {
+  const companyName = recordCompanyName(record);
+  if (!companyName) return null;
+  return {
+    companyName,
+    cin: recordCin(record),
+    status: recordStatus(record),
+  };
+}
+
+/**
+ * Exact match on CompanyName (ALL CAPS queries). Same RoC company-master
+ * resource also holds many LLP rows — there is no separate searchable LLP
+ * master API on data.gov.in for name lookup.
+ */
+async function lookupExactCompanyName(
+  query: string,
   apiKey: string,
-): Promise<DataGovRecord[]> {
-  const filterFields = ["company_name", "COMPANY_NAME"];
-  const allRecords: DataGovRecord[] = [];
+): Promise<{ available: boolean | "unknown"; match?: McaMatch }> {
+  const url = new URL(
+    `https://api.data.gov.in/resource/${COMPANY_MASTER_DATA_RESOURCE_ID}`,
+  );
+  url.searchParams.set("api-key", apiKey);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("limit", "10");
+  url.searchParams.set("filters[CompanyName]", query);
 
-  for (const field of filterFields) {
-    const url = new URL(
-      `https://api.data.gov.in/resource/${COMPANY_MASTER_DATA_RESOURCE_ID}`,
-    );
-    url.searchParams.set("api-key", apiKey);
-    url.searchParams.set("format", "json");
-    url.searchParams.set("limit", "50");
-    url.searchParams.set(`filters[${field}]`, name);
-
+  try {
     const response = await fetch(url.toString(), {
       signal: AbortSignal.timeout(15_000),
     });
-
-    if (!response.ok) continue;
+    if (!response.ok) {
+      return { available: "unknown" };
+    }
 
     const data = (await response.json()) as DataGovResponse;
     const records = data.records ?? data.data ?? [];
-    allRecords.push(...records);
+    if (records.length === 0) {
+      return { available: true };
+    }
+
+    const match = toMcaMatch(records[0]!);
+    return match
+      ? { available: false, match }
+      : { available: false };
+  } catch {
+    return { available: "unknown" };
   }
+}
 
-  if (allRecords.length > 0) {
-    return allRecords;
+function computeRegistrationScore(variants: McaVariantResult[]): number {
+  if (variants.length === 0) return 50;
+  let weightSum = 0;
+  let earned = 0;
+  for (const variant of variants) {
+    const weight =
+      variant.kind === "private_limited" || variant.kind === "bare"
+        ? 2
+        : variant.kind === "limited"
+          ? 0.5
+          : 1;
+    weightSum += weight;
+    if (variant.available === true) earned += weight;
+    else if (variant.available === "unknown") earned += weight * 0.4;
   }
-
-  const fallbackUrl = new URL(
-    `https://api.data.gov.in/resource/${COMPANY_MASTER_DATA_RESOURCE_ID}`,
-  );
-  fallbackUrl.searchParams.set("api-key", apiKey);
-  fallbackUrl.searchParams.set("format", "json");
-  fallbackUrl.searchParams.set("limit", "100");
-  fallbackUrl.searchParams.set("q", name);
-
-  const fallbackResponse = await fetch(fallbackUrl.toString(), {
-    signal: AbortSignal.timeout(15_000),
-  });
-
-  if (!fallbackResponse.ok) {
-    return [];
-  }
-
-  const fallbackData = (await fallbackResponse.json()) as DataGovResponse;
-  return fallbackData.records ?? fallbackData.data ?? [];
+  return Math.round((earned / weightSum) * 100);
 }
 
 export async function registrationCheck(
   name: string,
   apiKey: string,
+  category?: string,
 ): Promise<RegistrationResult> {
-  const records = await fetchMcaRecords(name, apiKey);
-  const { exact, partial } = classifyMatches(name, records);
-  const mcaMatches = [...exact, ...partial];
+  const parsed = parseBrandName(name);
+  const variantSpecs = buildMcaNameVariants(name, category);
+  const variants: McaVariantResult[] = [];
+  const mcaMatches: McaMatch[] = [];
+
+  for (let i = 0; i < variantSpecs.length; i++) {
+    const spec = variantSpecs[i]!;
+    if (i > 0) await sleep(REQUEST_GAP_MS);
+
+    const result = await lookupExactCompanyName(spec.query, apiKey);
+    const row: McaVariantResult = {
+      query: spec.query,
+      kind: spec.kind,
+      label: spec.label,
+      available: result.available,
+      companyName: result.match?.companyName,
+      cin: result.match?.cin,
+      status: result.match?.status,
+    };
+    variants.push(row);
+    if (result.match) mcaMatches.push(result.match);
+  }
 
   return {
-    score: computeRegistrationScore(exact.length, partial.length),
+    score: computeRegistrationScore(variants),
     mcaMatches,
-    trademarkSearchUrl: buildTrademarkSearchUrl(name),
+    variants,
+    trademarkSearchUrl: buildTrademarkSearchUrl(parsed.brandName),
+    note: MCA_CHECK_NOTE,
+    brandName: parsed.brandName,
+    isLegalName: parsed.isLegalName,
   };
 }
 
 export function disabledRegistrationResult(name: string): RegistrationResult {
+  const parsed = parseBrandName(name);
   return {
     score: 0,
     mcaMatches: [],
-    trademarkSearchUrl: buildTrademarkSearchUrl(name),
+    variants: [],
+    trademarkSearchUrl: buildTrademarkSearchUrl(parsed.brandName),
+    brandName: parsed.brandName,
+    isLegalName: parsed.isLegalName,
     disabled: true,
   };
 }

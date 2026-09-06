@@ -2,7 +2,14 @@ import { useState } from "react";
 import type {
   AnalyzeNameResponse,
   DomainCheckResult,
+  RegistrationResult,
   SeoResult,
+} from "@naamkaran/shared";
+import {
+  MCA_CHECK_NOTE,
+  MCA_LEGAL_NAME_HINT,
+  brandNameToDomainSlug,
+  parseBrandName,
 } from "@naamkaran/shared";
 import type { AnalyzeProgressState } from "../lib/analyze-stream";
 import { CATEGORIES } from "../lib/constants";
@@ -15,6 +22,10 @@ import {
   scoreColor,
   scoreLabel,
 } from "./viability-ui";
+
+const WEIGHT_DOMAIN = "35%";
+const WEIGHT_BRAND = "35%";
+const WEIGHT_MCA = "30%";
 
 interface ViabilityPanelProps {
   selectedName: string | null;
@@ -35,12 +46,14 @@ function HeaderStatus({
   compositeScore,
   domainPending,
   seoPending,
+  registrationPending,
   seoError,
   deepBrandSearch,
 }: {
   compositeScore: number | null;
   domainPending: boolean;
   seoPending: boolean;
+  registrationPending: boolean;
   seoError: string | null;
   deepBrandSearch: boolean;
 }) {
@@ -62,6 +75,9 @@ function HeaderStatus({
           : "Running quick brand search…"}
       </p>
     );
+  }
+  if (registrationPending) {
+    return <p className="text-sm text-slate-500">Checking MCA name forms…</p>;
   }
   if (seoError) {
     return <p className="text-sm text-amber-700">Domain checked — brand search failed</p>;
@@ -86,7 +102,7 @@ function BrandSection({
         <div className="flex items-center justify-between">
           <div>
             <h3 className="font-semibold text-slate-900">Brand uniqueness</h3>
-            <p className="text-xs text-slate-500">Weight 50%</p>
+            <p className="text-xs text-slate-500">Weight {WEIGHT_BRAND}</p>
           </div>
         </div>
         <p className="mt-4 border-t border-rose-200/80 pt-4 text-sm text-rose-700">
@@ -143,10 +159,10 @@ function DomainResults({
   name: string;
   domain: DomainCheckResult;
 }) {
-  const slug = name.toLowerCase().replace(/[^a-z0-9-]/g, "");
+  const slug = brandNameToDomainSlug(parseBrandName(name).brandName);
 
   return (
-    <ExpandableCard title="Domain availability" score={domain.score} weight="50%">
+    <ExpandableCard title="Domain availability" score={domain.score} weight={WEIGHT_DOMAIN}>
       <ul className="space-y-1.5">
         {domain.results.map((d) => (
           <li
@@ -182,7 +198,7 @@ function BrandResults({
   deepBrandSearch: boolean;
 }) {
   return (
-    <ExpandableCard title="Brand uniqueness" score={seo.score} weight="50%">
+    <ExpandableCard title="Brand uniqueness" score={seo.score} weight={WEIGHT_BRAND}>
       <p className="text-xs font-medium text-slate-400">
         {brandSearchModeLabel(deepBrandSearch)}
       </p>
@@ -212,23 +228,79 @@ function BrandResults({
   );
 }
 
+function RegistrationResults({ registration }: { registration: RegistrationResult }) {
+  if (registration.disabled) return null;
+
+  const variants = registration.variants ?? [];
+
+  return (
+    <ExpandableCard
+      title="MCA registration"
+      score={registration.score}
+      weight={WEIGHT_MCA}
+    >
+      {variants.length === 0 ? (
+        <p className="text-sm text-slate-600">No MCA forms were checked.</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {variants.map((variant) => (
+            <li
+              key={variant.query}
+              className="flex flex-col gap-2 rounded-lg bg-white/80 px-3 py-2 text-sm sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="min-w-0">
+                <p className="truncate font-mono text-slate-800">{variant.query}</p>
+                <p className="text-xs text-slate-400">
+                  {variant.label}
+                  {variant.status ? ` · ${variant.status}` : ""}
+                  {variant.cin ? ` · ${variant.cin}` : ""}
+                </p>
+              </div>
+              <span
+                className={`shrink-0 self-start rounded-full px-2 py-0.5 text-xs font-medium sm:self-center ${availabilityClass(variant.available)}`}
+              >
+                {availabilityLabel(variant.available)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-3 text-xs text-slate-500">{registration.note ?? MCA_CHECK_NOTE}</p>
+      {registration.trademarkSearchUrl ? (
+        <a
+          href={registration.trademarkSearchUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-2 inline-block text-xs text-indigo-600 hover:underline"
+        >
+          Check trademarks (IP India)
+        </a>
+      ) : null}
+    </ExpandableCard>
+  );
+}
+
 function ViabilityContent({
   name,
   domain,
   seo,
+  registration,
   compositeScore,
   seoError,
   domainPending,
   seoPending,
+  registrationPending,
   deepBrandSearch,
 }: {
   name: string;
   domain: DomainCheckResult | null;
   seo: SeoResult | null;
+  registration: RegistrationResult | null;
   compositeScore: number | null;
   seoError: string | null;
   domainPending: boolean;
   seoPending: boolean;
+  registrationPending: boolean;
   deepBrandSearch: boolean;
 }) {
   return (
@@ -243,6 +315,7 @@ function ViabilityContent({
             compositeScore={compositeScore}
             domainPending={domainPending}
             seoPending={seoPending}
+            registrationPending={registrationPending}
             seoError={seoError}
             deepBrandSearch={deepBrandSearch}
           />
@@ -261,6 +334,12 @@ function ViabilityContent({
         seoPending={seoPending}
         deepBrandSearch={deepBrandSearch}
       />
+
+      {registration && !registration.disabled ? (
+        <RegistrationResults registration={registration} />
+      ) : registrationPending ? (
+        <ModuleCardSkeleton title="MCA registration" subtitle="Checking company name forms…" />
+      ) : null}
     </div>
   );
 }
@@ -294,7 +373,7 @@ function EmptyState() {
             <div>
               <p className="text-sm font-medium text-slate-900">Click any suggestion</p>
               <p className="mt-0.5 text-sm text-slate-500">
-                We check domains (RDAP/WHOIS) and run a quick brand search on Google.
+                We check domains, brand uniqueness, and MCA company-name forms.
               </p>
             </div>
           </li>
@@ -305,13 +384,30 @@ function EmptyState() {
             <div>
               <p className="text-sm font-medium text-slate-900">Compare scores</p>
               <p className="mt-0.5 text-sm text-slate-500">
-                Domain + brand uniqueness combined into one score.
+                Domain, brand, and MCA forms combine into one score.
               </p>
             </div>
           </li>
         </ol>
       </div>
     </div>
+  );
+}
+
+function InfoHint({ text }: { text: string }) {
+  return (
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        className="flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold text-slate-500 hover:border-indigo-400 hover:text-indigo-600"
+        aria-label="About name checking"
+      >
+        i
+      </button>
+      <span className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-56 -translate-x-1/2 rounded-lg bg-slate-900 px-3 py-2 text-left text-xs leading-relaxed text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        {text}
+      </span>
+    </span>
   );
 }
 
@@ -339,9 +435,12 @@ function ManualSearch({
       }}
       className="border-t border-slate-200 bg-white p-3 sm:p-4"
     >
-      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">
-        Manual check
-      </p>
+      <div className="mb-2 flex items-center gap-1.5">
+        <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+          Manual check
+        </p>
+        <InfoHint text={MCA_LEGAL_NAME_HINT} />
+      </div>
       <div className="flex flex-col gap-2 sm:flex-row">
         <input
           type="text"
@@ -390,11 +489,16 @@ export function ViabilityPanel({
   const viewName = result?.name ?? progress?.name ?? selectedName;
   const domain = result?.domain ?? progress?.domain ?? null;
   const seo = result?.seo ?? progress?.seo ?? null;
+  const registration = result?.registration ?? progress?.registration ?? null;
   const compositeScore = result?.compositeScore ?? progress?.compositeScore ?? null;
   const activeSeoError = seoError ?? progress?.seoError ?? null;
   const domainPending = loading && (progress?.domainPending ?? !domain);
   const seoPending =
     loading && !activeSeoError && (progress?.seoPending ?? (domain != null && !seo));
+  const registrationPending =
+    loading &&
+    (progress?.registrationPending ??
+      (domain != null && seo != null && !(registration && !registration.disabled)));
   const showResults = Boolean(viewName && (loading || result || domain));
 
   return (
@@ -402,7 +506,7 @@ export function ViabilityPanel({
       <div className="hidden h-20 shrink-0 flex-col justify-center border-b border-slate-200 bg-white px-4 lg:flex">
         <h2 className="font-semibold text-slate-900">Viability score</h2>
         <p className="line-clamp-2 text-sm text-slate-500">
-          Domain availability + brand uniqueness (quick mode by default)
+          Domains + brand uniqueness + MCA name forms
         </p>
       </div>
 
@@ -416,10 +520,12 @@ export function ViabilityPanel({
             name={viewName}
             domain={domain}
             seo={seo}
+            registration={registration}
             compositeScore={compositeScore}
             seoError={activeSeoError}
             domainPending={domainPending}
             seoPending={seoPending}
+            registrationPending={registrationPending}
             deepBrandSearch={deepBrandSearch}
           />
         ) : (
