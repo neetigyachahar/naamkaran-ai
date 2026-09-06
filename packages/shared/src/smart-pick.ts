@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GeminiModelIdSchema } from "./gemini-models.js";
+import { OpenRouterModelIdSchema } from "./models.js";
 import { ChatMessageSchema, NameGenreIdSchema } from "./name-genres.js";
 
 export const SMART_PICK_MIN_SCORE = 60;
@@ -18,7 +18,7 @@ export const SmartPickRequestSchema = z.object({
     (value) => (value === null || value === "" ? undefined : value),
     z.string().max(200).optional(),
   ),
-  model: GeminiModelIdSchema.optional(),
+  model: OpenRouterModelIdSchema.optional(),
   apiKey: z.string().min(10).optional(),
 });
 

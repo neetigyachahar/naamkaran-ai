@@ -2,7 +2,7 @@ import type {
   AnalyzeNameRequest,
   AnalyzeNameResponse,
   DomainCheckResult,
-  GeminiModelId,
+  OpenRouterModelId,
   SeoResult,
 } from "@naamkaran/shared";
 import type { AnalyzeStreamEvent } from "@naamkaran/shared";
@@ -89,7 +89,7 @@ function applyEvent(
 
 export async function streamAnalyzeName(
   request: AnalyzeNameRequest,
-  modelId: GeminiModelId,
+  modelId: OpenRouterModelId,
   onProgress: (state: AnalyzeProgressState) => void,
   signal?: AbortSignal,
   apiKey?: string,

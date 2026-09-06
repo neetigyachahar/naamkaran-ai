@@ -1,6 +1,6 @@
-import type { AnalyzeStreamEvent, GeminiModelId } from "@naamkaran/shared";
-import { resolveGeminiModelId } from "@naamkaran/shared";
-import { analysisCacheKey, type BrandSearchMode } from "../lib/gemini";
+import type { AnalyzeStreamEvent, OpenRouterModelId } from "@naamkaran/shared";
+import { resolveOpenRouterModelId } from "@naamkaran/shared";
+import { analysisCacheKey, type BrandSearchMode } from "../lib/openrouter";
 import { getCachedAnalysis, setCachedAnalysis } from "../lib/analysis-cache";
 import { analyzeNameWithProgress } from "../orchestrator";
 
@@ -8,13 +8,13 @@ type Emit = (event: AnalyzeStreamEvent) => void;
 
 export async function runAnalyzeStream(
   name: string,
-  secrets: { googleAiKey: string; dataGovKey?: string },
+  secrets: { openRouterKey: string; dataGovKey?: string },
   category: string | undefined,
-  modelId: GeminiModelId | undefined,
+  modelId: OpenRouterModelId | undefined,
   emit: Emit,
   brandSearchMode: BrandSearchMode = "lite",
 ): Promise<void> {
-  const model = resolveGeminiModelId(modelId);
+  const model = resolveOpenRouterModelId(modelId);
   const cacheKey = analysisCacheKey(name, model, brandSearchMode);
   const cached = await getCachedAnalysis(cacheKey);
 

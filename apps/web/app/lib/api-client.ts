@@ -1,5 +1,5 @@
 import type {
-  GeminiModelId,
+  OpenRouterModelId,
   GenerateNamesRequest,
   GenerateNamesResponse,
 } from "@naamkaran/shared";
@@ -18,7 +18,7 @@ export function getGenerateNamesUrl(): string {
 
 export async function generateNames(
   request: GenerateNamesRequest,
-  modelId: GeminiModelId,
+  modelId: OpenRouterModelId,
   apiKey?: string,
 ): Promise<GenerateNamesResponse> {
   const payload: GenerateNamesRequest = {

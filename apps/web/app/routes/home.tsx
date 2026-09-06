@@ -194,7 +194,7 @@ export default function Home() {
                 </p>
                 <p>
                   Results stream in live — domain availability via RDAP (with WHOIS fallback across
-                  TLDs), then brand uniqueness through grounded Google Search from multiple angles.
+                  TLDs), then brand uniqueness through grounded web search from multiple angles.
                   Domain and brand each contribute 50% to a composite score you can compare across
                   finalists.
                 </p>
@@ -271,9 +271,9 @@ export default function Home() {
                   <div>
                     <p className="font-semibold text-slate-900">Brand uniqueness</p>
                     <p className="mt-1 text-sm leading-relaxed text-slate-600">
-                      Gemini runs grounded Google Search — exact name, name plus category, similar
-                      spellings — and returns a score with cited evidence. Not legal clearance, but
-                      it catches obvious collisions early.
+                      A free model runs grounded web search via OpenRouter — exact name, name plus
+                      category, similar spellings — and returns a score with cited evidence. Not
+                      legal clearance, but it catches obvious collisions early.
                     </p>
                   </div>
                 </li>

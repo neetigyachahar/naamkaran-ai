@@ -1,35 +1,31 @@
-import type { GeminiModelId, SeoResult, SeoSource } from "@naamkaran/shared";
-import { resolveGeminiModelId } from "@naamkaran/shared";
-import type { BrandSearchMode } from "../lib/gemini";
-import { geminiFetch } from "../lib/gemini-throttle";
-import { getGeminiGenerateUrl } from "../lib/gemini";
+import type { OpenRouterModelId, SeoResult, SeoSource } from "@naamkaran/shared";
+import { resolveOpenRouterModelId } from "@naamkaran/shared";
+import { chatCompletion, type BrandSearchMode, type WebCitation } from "../lib/openrouter";
 
 const LITE_TIMEOUT_MS = 60_000;
-const DEEP_TIMEOUT_MS = 45_000;
+const DEEP_TIMEOUT_MS = 90_000;
 const LITE_MAX_OUTPUT_TOKENS = 384;
 const DEEP_MAX_OUTPUT_TOKENS = 512;
+const LITE_SEARCH_RESULTS = 3;
+const DEEP_SEARCH_RESULTS = 5;
 const BORDERLINE_LOW = 35;
 const BORDERLINE_HIGH = 65;
 
-interface GeminiSeoPayload {
+interface SeoPayload {
   isExistingBrand: boolean;
   confidence: number;
   summary: string;
   competitors?: string[];
 }
 
-interface GroundingChunk {
-  web?: { title?: string; uri?: string };
-}
-
-interface GeminiResponse {
-  payload: GeminiSeoPayload;
+interface SearchResponse {
+  payload: SeoPayload;
   sources: SeoSource[];
 }
 
 function buildLitePrompt(name: string, category?: string): string {
   const context = category ? ` in ${category}` : "";
-  return `One quick web search: is "${name}"${context} already a known brand, product, company, or app?
+  return `Search the web: is "${name}"${context} already a known brand, product, company, or app?
 
 Be brief. If you find a clear match, set isExistingBrand true.
 
@@ -41,7 +37,7 @@ function buildDeepPrimaryPrompt(name: string, category?: string): string {
     ? `3. "${name}" ${category} company or product in India`
     : `3. "${name}" India startup or company`;
 
-  return `Run separate web searches for the name "${name}":
+  return `Search the web thoroughly for the name "${name}":
 1. Exact match — is this already a known brand, product, or company name?
 2. "${name}" startup OR app OR software OR SaaS — any active businesses using this name?
 ${categorySearch}
@@ -60,10 +56,10 @@ Focus on distinguishing real brands from generic/unrelated word matches.
 Respond ONLY with JSON (no markdown): {"isExistingBrand": boolean, "confidence": 0-100, "summary": "1-2 sentence explanation", "competitors": ["name1", "name2"]}`;
 }
 
-function tryParseJsonObject(candidate: string): GeminiSeoPayload | null {
+function tryParseJsonObject(candidate: string): SeoPayload | null {
   try {
-    const parsed = JSON.parse(candidate) as GeminiSeoPayload;
-    return normalizeGeminiPayload(parsed);
+    const parsed = JSON.parse(candidate) as SeoPayload;
+    return normalizePayload(parsed);
   } catch {
     return null;
   }
@@ -81,7 +77,7 @@ function repairTruncatedJsonCandidates(candidate: string): string[] {
   ];
 }
 
-function extractGeminiFieldsRegex(text: string): GeminiSeoPayload | null {
+function extractFieldsRegex(text: string): SeoPayload | null {
   const isBrandMatch = text.match(/"isExistingBrand"\s*:\s*(true|false)/i);
   const confMatch = text.match(/"confidence"\s*:\s*(\d+)/);
   const summaryMatch = text.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)(?:"|$)/s);
@@ -120,7 +116,7 @@ function fallbackSummary(name: string, isExistingBrand: boolean, confidence: num
   return `"${name}" does not appear to be a widely known brand in quick search results.`;
 }
 
-function normalizeGeminiPayload(parsed: GeminiSeoPayload): GeminiSeoPayload {
+function normalizePayload(parsed: SeoPayload): SeoPayload {
   return {
     isExistingBrand: Boolean(parsed.isExistingBrand),
     confidence: Math.min(100, Math.max(0, Number(parsed.confidence) || 0)),
@@ -131,7 +127,7 @@ function normalizeGeminiPayload(parsed: GeminiSeoPayload): GeminiSeoPayload {
 
 type ParseQuality = "full" | "partial" | "failed";
 
-function parseGeminiJson(text: string, name: string): { payload: GeminiSeoPayload; quality: ParseQuality } {
+function parseSeoJson(text: string, name: string): { payload: SeoPayload; quality: ParseQuality } {
   const cleaned = text.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
   const jsonMatch = cleaned.match(/\{[\s\S]*/);
   const candidate = jsonMatch?.[0] ?? cleaned;
@@ -148,7 +144,7 @@ function parseGeminiJson(text: string, name: string): { payload: GeminiSeoPayloa
     }
   }
 
-  const extracted = extractGeminiFieldsRegex(candidate);
+  const extracted = extractFieldsRegex(candidate);
   if (extracted) {
     const payload = {
       ...extracted,
@@ -180,145 +176,83 @@ function parseGeminiJson(text: string, name: string): { payload: GeminiSeoPayloa
   };
 }
 
-function extractSources(chunks: GroundingChunk[] | undefined): SeoSource[] {
-  const seen = new Set<string>();
-  const sources: SeoSource[] = [];
-
-  for (const chunk of chunks ?? []) {
-    const uri = chunk.web?.uri ?? "";
-    if (!uri || seen.has(uri)) continue;
-    seen.add(uri);
-    sources.push({
-      title: chunk.web?.title ?? "Source",
-      uri,
-    });
-  }
-
-  return sources;
-}
-
-async function callGeminiText(
-  apiKey: string,
-  prompt: string,
-  modelId: GeminiModelId,
-  maxOutputTokens: number,
-): Promise<string> {
-  const response = await geminiFetch(
-    `${getGeminiGenerateUrl(modelId)}?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens },
-      }),
-      signal: AbortSignal.timeout(15_000),
-    },
-    { operation: "brand_search" },
-  );
-
-  if (!response.ok) {
-    return "";
-  }
-
-  const data = (await response.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-
-  return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
+function toSeoSources(citations: WebCitation[]): SeoSource[] {
+  return citations.map((citation) => ({ title: citation.title, uri: citation.uri }));
 }
 
 async function writeBrandSummary(
   apiKey: string,
   name: string,
-  payload: GeminiSeoPayload,
+  payload: SeoPayload,
   sources: SeoSource[],
-  modelId: GeminiModelId,
+  modelId: OpenRouterModelId,
 ): Promise<string> {
   const sourceHint = sources
     .slice(0, 5)
     .map((s) => s.title)
     .join(", ");
 
-  const generated = await callGeminiText(
-    apiKey,
-    `Write one clear sentence about brand uniqueness for the name "${name}".
+  try {
+    const { text } = await chatCompletion({
+      apiKey,
+      model: modelId,
+      operation: "brand_search",
+      maxTokens: 128,
+      timeoutMs: 20_000,
+      messages: [
+        {
+          role: "user",
+          content: `Write one clear sentence about brand uniqueness for the name "${name}".
 Existing brand: ${payload.isExistingBrand}
 Confidence: ${payload.confidence}%
 ${sourceHint ? `Sources: ${sourceHint}` : ""}
 
 Reply with only the summary sentence.`,
-    modelId,
-    128,
-  );
+        },
+      ],
+    });
 
-  if (generated && !isWeakSummary(generated)) {
-    return generated;
+    if (text && !isWeakSummary(text)) {
+      return text;
+    }
+  } catch {
+    // fall through to deterministic summary
   }
 
   return fallbackSummary(name, payload.isExistingBrand, payload.confidence);
 }
 
-interface RawGeminiSearchResult {
-  text: string;
-  sources: SeoSource[];
-}
-
-async function executeGeminiSearch(
+async function executeSearch(
   apiKey: string,
   prompt: string,
-  modelId: GeminiModelId,
+  modelId: OpenRouterModelId,
   mode: BrandSearchMode,
-): Promise<RawGeminiSearchResult | null> {
-  const response = await geminiFetch(
-    `${getGeminiGenerateUrl(modelId)}?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        tools: [{ google_search: {} }],
-        generationConfig: {
-          maxOutputTokens:
-            mode === "deep" ? DEEP_MAX_OUTPUT_TOKENS : LITE_MAX_OUTPUT_TOKENS,
-        },
-      }),
-      signal: AbortSignal.timeout(mode === "deep" ? DEEP_TIMEOUT_MS : LITE_TIMEOUT_MS),
-    },
-    { operation: "brand_search" },
-  );
+): Promise<{ text: string; sources: SeoSource[] } | null> {
+  const { text, citations } = await chatCompletion({
+    apiKey,
+    model: modelId,
+    operation: "brand_search",
+    maxTokens: mode === "deep" ? DEEP_MAX_OUTPUT_TOKENS : LITE_MAX_OUTPUT_TOKENS,
+    timeoutMs: mode === "deep" ? DEEP_TIMEOUT_MS : LITE_TIMEOUT_MS,
+    webSearchMaxResults: mode === "deep" ? DEEP_SEARCH_RESULTS : LITE_SEARCH_RESULTS,
+    messages: [{ role: "user", content: prompt }],
+  });
 
-  if (!response.ok) {
-    return null;
-  }
-
-  const data = (await response.json()) as {
-    candidates?: Array<{
-      content?: { parts?: Array<{ text?: string }> };
-      groundingMetadata?: { groundingChunks?: GroundingChunk[] };
-    }>;
-  };
-
-  const candidate = data.candidates?.[0];
-  const text = candidate?.content?.parts?.[0]?.text;
   if (!text) {
     return null;
   }
 
-  return {
-    text,
-    sources: extractSources(candidate.groundingMetadata?.groundingChunks),
-  };
+  return { text, sources: toSeoSources(citations) };
 }
 
-async function callGeminiSearch(
+async function runSearch(
   apiKey: string,
   prompt: string,
   name: string,
-  modelId: GeminiModelId,
+  modelId: OpenRouterModelId,
   mode: BrandSearchMode,
-): Promise<GeminiResponse> {
-  const raw = await executeGeminiSearch(apiKey, prompt, modelId, mode);
+): Promise<SearchResponse> {
+  const raw = await executeSearch(apiKey, prompt, modelId, mode);
   if (!raw) {
     return {
       payload: {
@@ -331,8 +265,8 @@ async function callGeminiSearch(
     };
   }
 
-  let { payload, quality } = parseGeminiJson(raw.text, name);
-  let sources = raw.sources;
+  let { payload, quality } = parseSeoJson(raw.text, name);
+  const sources = raw.sources;
 
   if (quality !== "full" || isWeakSummary(payload.summary)) {
     payload = {
@@ -359,10 +293,7 @@ function mergeSources(...sourceLists: SeoSource[][]): SeoSource[] {
   return merged;
 }
 
-function mergePayloads(
-  primary: GeminiSeoPayload,
-  secondary: GeminiSeoPayload,
-): GeminiSeoPayload {
+function mergePayloads(primary: SeoPayload, secondary: SeoPayload): SeoPayload {
   const isExistingBrand = primary.isExistingBrand || secondary.isExistingBrand;
 
   let confidence: number;
@@ -439,7 +370,7 @@ function timedOutSeoResult(mode: BrandSearchMode): SeoResult {
   };
 }
 
-function toSeoResult(payload: GeminiSeoPayload, sources: SeoSource[]): SeoResult {
+function toSeoResult(payload: SeoPayload, sources: SeoSource[]): SeoResult {
   return {
     score: computeSeoScore(payload.isExistingBrand, payload.confidence),
     isExistingBrand: payload.isExistingBrand,
@@ -453,9 +384,9 @@ async function seoCheckLite(
   name: string,
   apiKey: string,
   category: string | undefined,
-  model: GeminiModelId,
+  model: OpenRouterModelId,
 ): Promise<SeoResult> {
-  const { payload, sources } = await callGeminiSearch(
+  const { payload, sources } = await runSearch(
     apiKey,
     buildLitePrompt(name, category),
     name,
@@ -469,9 +400,9 @@ async function seoCheckDeep(
   name: string,
   apiKey: string,
   category: string | undefined,
-  model: GeminiModelId,
+  model: OpenRouterModelId,
 ): Promise<SeoResult> {
-  const primary = await callGeminiSearch(
+  const primary = await runSearch(
     apiKey,
     buildDeepPrimaryPrompt(name, category),
     name,
@@ -483,7 +414,7 @@ async function seoCheckDeep(
   let sources = primary.sources;
 
   if (isBorderline(primary.payload.confidence, primary.payload.isExistingBrand)) {
-    const followUp = await callGeminiSearch(
+    const followUp = await runSearch(
       apiKey,
       buildDeepFollowUpPrompt(name, category),
       name,
@@ -501,10 +432,10 @@ export async function seoCheck(
   name: string,
   apiKey: string,
   category?: string,
-  modelId?: GeminiModelId,
+  modelId?: OpenRouterModelId,
   mode: BrandSearchMode = "lite",
 ): Promise<SeoResult> {
-  const model = resolveGeminiModelId(modelId);
+  const model = resolveOpenRouterModelId(modelId);
 
   try {
     if (mode === "deep") {

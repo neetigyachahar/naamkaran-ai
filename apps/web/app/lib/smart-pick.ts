@@ -1,4 +1,4 @@
-import type { GeminiModelId, SmartPickEvent, SmartPickRequest } from "@naamkaran/shared";
+import type { OpenRouterModelId, SmartPickEvent, SmartPickRequest } from "@naamkaran/shared";
 import {
   SMART_PICK_MIN_ACCEPTED,
   SMART_PICK_MIN_SCORE,
@@ -163,7 +163,7 @@ function applyEvent(state: SmartPickState, event: SmartPickEvent): SmartPickStat
 
 export async function streamSmartPick(
   request: SmartPickRequest,
-  modelId: GeminiModelId,
+  modelId: OpenRouterModelId,
   onUpdate: (state: SmartPickState) => void,
   signal?: AbortSignal,
   apiKey?: string,

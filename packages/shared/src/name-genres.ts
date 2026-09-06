@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GeminiModelIdSchema } from "./gemini-models.js";
+import { OpenRouterModelIdSchema } from "./models.js";
 
 export const DEFAULT_GENRE_ID = "best-fit" as const;
 
@@ -108,7 +108,7 @@ export const GenerateNamesRequestSchema = z.object({
     z.string().max(200).optional(),
   ),
   smartPick: z.boolean().optional(),
-  model: GeminiModelIdSchema.optional(),
+  model: OpenRouterModelIdSchema.optional(),
   apiKey: z.string().min(10).optional(),
 });
 

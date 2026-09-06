@@ -1,10 +1,9 @@
-import type { ChatMessage, GenerateNamesResponse, GeminiModelId } from "@naamkaran/shared";
+import type { ChatMessage, GenerateNamesResponse, OpenRouterModelId } from "@naamkaran/shared";
 import type { NameGenreId } from "@naamkaran/shared";
-import { DEFAULT_NAME_COUNT, resolveGeminiModelId, SMART_PICK_BATCH_SIZE } from "@naamkaran/shared";
+import { DEFAULT_NAME_COUNT, resolveOpenRouterModelId, SMART_PICK_BATCH_SIZE } from "@naamkaran/shared";
 import { getGenreInstruction, resolveNameCount } from "../config/name-genres";
-import { getGeminiGenerateUrl } from "../lib/gemini";
-import { geminiApiError } from "../lib/gemini-api-error";
-import { geminiFetch } from "../lib/gemini-throttle";
+import { chatCompletion, type OpenRouterMessage } from "../lib/openrouter";
+import { openRouterApiError } from "../lib/openrouter-api-error";
 
 function buildSystemPrompt(
   genreId: NameGenreId,
@@ -22,7 +21,7 @@ function buildSystemPrompt(
     ? `
 
 ## Smart pick viability rules (active — every name will be auto-checked)
-- Each name is scored for domain availability (.com, .in, etc.) and existing brands via Google search.
+- Each name is scored for domain availability (.com, .in, etc.) and existing brands via web search.
 - Only names scoring 60+ are kept. Favor names likely to pass:
   - Coined or altered spellings — not plain dictionary words big companies already own.
   - No overlap with known products, apps, startups, or brands in the user's space.
@@ -82,9 +81,9 @@ export async function generateNames(
   context?: string,
   smartPick?: boolean,
   excludeNames?: string[],
-  modelId?: GeminiModelId,
+  modelId?: OpenRouterModelId,
 ): Promise<GenerateNamesResponse> {
-  const model = resolveGeminiModelId(modelId);
+  const model = resolveOpenRouterModelId(modelId);
   const nameCount = smartPick
     ? SMART_PICK_BATCH_SIZE
     : resolveNameCount(messages);
@@ -96,42 +95,28 @@ export async function generateNames(
     excludeNames,
   );
 
-  const contents = messages.map((msg) => ({
-    role: msg.role === "assistant" ? "model" : "user",
-    parts: [{ text: msg.content }],
-  }));
+  const chatMessages: OpenRouterMessage[] = [
+    { role: "system", content: systemPrompt },
+    ...messages.map((msg) => ({
+      role: msg.role === "assistant" ? ("assistant" as const) : ("user" as const),
+      content: msg.content,
+    })),
+  ];
 
-  const response = await geminiFetch(
-    `${getGeminiGenerateUrl(model)}?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        contents,
-        generationConfig: { responseMimeType: "application/json" },
-      }),
-      signal: AbortSignal.timeout(60_000),
-    },
-    { operation: "name_generate" },
-  );
+  const { text } = await chatCompletion({
+    apiKey,
+    model,
+    messages: chatMessages,
+    operation: "name_generate",
+    jsonMode: true,
+    maxTokens: 1024,
+    timeoutMs: 60_000,
+  });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw geminiApiError(`Gemini API error ${response.status}: ${body}`, "name_generate", {
-      httpStatus: response.status,
-    });
-  }
-
-  const data = (await response.json()) as {
-    candidates?: Array<{
-      content?: { parts?: Array<{ text?: string }> };
-    }>;
-  };
-
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) {
-    throw geminiApiError("Gemini returned no content", "name_generate", { code: "no_content" });
+    throw openRouterApiError("OpenRouter returned no content", "name_generate", {
+      code: "no_content",
+    });
   }
 
   return parseResponse(text, nameCount);

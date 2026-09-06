@@ -1,5 +1,5 @@
-import type { GeminiModelId } from "@naamkaran/shared";
-import { GEMINI_MODELS, getGeminiModelLabel } from "@naamkaran/shared";
+import type { OpenRouterModelId } from "@naamkaran/shared";
+import { OPENROUTER_MODELS, getOpenRouterModelLabel } from "@naamkaran/shared";
 import { useState } from "react";
 import { Link } from "react-router";
 import { useByok } from "../lib/byok-context";
@@ -10,7 +10,7 @@ export function AppHeader() {
   const { apiKey, isActive, modelId, deepBrandSearch, setModelId, saveByok, clearByok } = useByok();
   const [dialogOpen, setDialogOpen] = useState(false);
 
-  const selected = GEMINI_MODELS.find((model) => model.id === modelId);
+  const selected = OPENROUTER_MODELS.find((model) => model.id === modelId);
 
   return (
     <>
@@ -37,7 +37,7 @@ export function AppHeader() {
           {isActive ? (
             <span className="hidden items-center gap-1.5 text-xs font-medium text-emerald-700 sm:flex">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
-              {getGeminiModelLabel(modelId)}
+              {getOpenRouterModelLabel(modelId)}
             </span>
           ) : (
             <div className="flex items-center">
@@ -47,13 +47,13 @@ export function AppHeader() {
               <select
                 id="gemini-model"
                 value={modelId}
-                onChange={(e) => setModelId(e.target.value as GeminiModelId)}
+                onChange={(e) => setModelId(e.target.value as OpenRouterModelId)}
                 className="max-w-[11rem] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 sm:max-w-none sm:text-sm"
-                title={selected ? `${selected.label} — ${selected.rpd} req/day` : undefined}
+                title={selected ? `${selected.label} — free via OpenRouter` : undefined}
               >
-                {GEMINI_MODELS.map((model) => (
+                {OPENROUTER_MODELS.map((model) => (
                   <option key={model.id} value={model.id}>
-                    {model.label} ({model.rpd}/day)
+                    {model.label} (free)
                   </option>
                 ))}
               </select>
