@@ -1,0 +1,21 @@
+{
+  "name": "Naamkaran",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "emulators",
+      "description": "Builds the Cloud Functions bundle and serves the Firebase Functions emulator on port 5001 (Emulator UI on 4000).",
+      "command": "export PATH=\"$HOME/.bun/bin:$PATH\"; cd /workspace/apps/functions && bun run build && cd /workspace && ./node_modules/.bin/firebase emulators:start --only functions --project naamkaran-407d7"
+    },
+    {
+      "name": "web",
+      "description": "Runs the React Router (Vite) SPA dev server on port 5173, wired to the Functions emulator.",
+      "command": "export PATH=\"$HOME/.bun/bin:$PATH\"; cd /workspace && bun run dev --filter=web"
+    }
+  ],
+  "ports": [
+    { "name": "web dev server", "port": 5173 },
+    { "name": "functions emulator", "port": 5001 },
+    { "name": "emulator UI", "port": 4000 }
+  ]
+}
