@@ -6,12 +6,12 @@ import { AnalyzeNameRequestSchema } from "@naamkaran/shared";
 import { AnalyzeStreamRequestSchema } from "@naamkaran/shared";
 import { GenerateNamesRequestSchema } from "@naamkaran/shared";
 import { SmartPickRequestSchema } from "@naamkaran/shared";
-import { resolveGeminiModelId } from "@naamkaran/shared";
+import { resolveOpenRouterModelId } from "@naamkaran/shared";
 import type { AnalyzeStreamEvent } from "@naamkaran/shared";
 import type { SmartPickEvent } from "@naamkaran/shared";
 import { PUBLIC_CORS_OPTIONS, applyStreamCors } from "./config/cors";
 import { REGISTRATION_CHECK_ENABLED } from "./config/features";
-import { analysisCacheKey, type BrandSearchMode } from "./lib/gemini";
+import { analysisCacheKey, type BrandSearchMode } from "./lib/openrouter";
 import { getCachedAnalysis, setCachedAnalysis } from "./lib/analysis-cache";
 import { runAnalyzeStream } from "./modules/analyze-stream";
 import { generateNames as runNameGeneration } from "./modules/name-generation";
@@ -21,12 +21,12 @@ import { analyzeName as runAnalysis } from "./orchestrator";
 initializeApp();
 setGlobalOptions({ maxInstances: 10 });
 
-const googleAiKey = defineSecret("GOOGLE_AI_STUDIO_KEY");
+const openRouterKey = defineSecret("OPENROUTER_API_KEY");
 const dataGovKey = defineSecret("DATA_GOV_IN_API_KEY");
 
 const secrets = REGISTRATION_CHECK_ENABLED
-  ? [googleAiKey, dataGovKey]
-  : [googleAiKey];
+  ? [openRouterKey, dataGovKey]
+  : [openRouterKey];
 
 function writeSseEvent<T extends { type: string }>(
   res: { write: (chunk: string) => boolean },
@@ -37,11 +37,11 @@ function writeSseEvent<T extends { type: string }>(
 
 function resolveAiKey(requestKey?: string): string {
   if (requestKey) return requestKey;
-  const serverKey = googleAiKey.value();
+  const serverKey = openRouterKey.value();
   if (!serverKey) {
     throw new HttpsError(
       "failed-precondition",
-      "API key is not configured. Set GOOGLE_AI_STUDIO_KEY secret or provide your own key.",
+      "API key is not configured. Set OPENROUTER_API_KEY secret or provide your own key.",
     );
   }
   return serverKey;
@@ -56,7 +56,7 @@ function resolveBrandSearchMode(
 
 function resolveAiKeyOrNull(requestKey?: string): string | null {
   if (requestKey) return requestKey;
-  return googleAiKey.value() || null;
+  return openRouterKey.value() || null;
 }
 
 export const analyzeName = onCall(
@@ -73,9 +73,9 @@ export const analyzeName = onCall(
     }
 
     const { name, category, model, apiKey: requestApiKey, deepBrandSearch } = parsed.data;
-    const geminiModel = resolveGeminiModelId(model);
+    const resolvedModel = resolveOpenRouterModelId(model);
     const brandSearchMode = resolveBrandSearchMode(requestApiKey, deepBrandSearch);
-    const cacheKey = analysisCacheKey(name, geminiModel, brandSearchMode);
+    const cacheKey = analysisCacheKey(name, resolvedModel, brandSearchMode);
 
     const cached = await getCachedAnalysis(cacheKey);
     if (cached) return cached;
@@ -93,9 +93,9 @@ export const analyzeName = onCall(
     try {
       const result = await runAnalysis(
         name,
-        { googleAiKey: aiKey, dataGovKey: govKey },
+        { openRouterKey: aiKey, dataGovKey: govKey },
         category,
-        geminiModel,
+        resolvedModel,
         brandSearchMode,
       );
 
@@ -112,7 +112,7 @@ export const analyzeName = onCall(
 export const generateNamesHttp = onRequest(
   {
     ...PUBLIC_CORS_OPTIONS,
-    secrets: [googleAiKey],
+    secrets: [openRouterKey],
     timeoutSeconds: 60,
     memory: "256MiB",
   },
@@ -132,7 +132,7 @@ export const generateNamesHttp = onRequest(
 
     const aiKey = resolveAiKeyOrNull(parsed.data.apiKey);
     if (!aiKey) {
-      res.status(500).json({ error: "GOOGLE_AI_STUDIO_KEY is not configured" });
+      res.status(500).json({ error: "OPENROUTER_API_KEY is not configured" });
       return;
     }
 
@@ -178,7 +178,7 @@ export const analyzeNameStream = onRequest(
 
     const aiKey = resolveAiKeyOrNull(parsed.data.apiKey);
     if (!aiKey) {
-      res.status(500).json({ error: "GOOGLE_AI_STUDIO_KEY is not configured" });
+      res.status(500).json({ error: "OPENROUTER_API_KEY is not configured" });
       return;
     }
 
@@ -191,7 +191,7 @@ export const analyzeNameStream = onRequest(
 
     await runAnalyzeStream(
       parsed.data.name,
-      { googleAiKey: aiKey, dataGovKey: govKey },
+      { openRouterKey: aiKey, dataGovKey: govKey },
       parsed.data.category,
       parsed.data.model,
       (event: AnalyzeStreamEvent) => writeSseEvent(res, event),
@@ -205,7 +205,7 @@ export const analyzeNameStream = onRequest(
 export const smartPickStream = onRequest(
   {
     ...PUBLIC_CORS_OPTIONS,
-    secrets: [googleAiKey],
+    secrets: [openRouterKey],
     timeoutSeconds: 540,
     memory: "512MiB",
   },
@@ -225,7 +225,7 @@ export const smartPickStream = onRequest(
 
     const aiKey = resolveAiKeyOrNull(parsed.data.apiKey);
     if (!aiKey) {
-      res.status(500).json({ error: "GOOGLE_AI_STUDIO_KEY is not configured" });
+      res.status(500).json({ error: "OPENROUTER_API_KEY is not configured" });
       return;
     }
 

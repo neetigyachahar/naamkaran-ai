@@ -4082,18 +4082,18 @@ var coerce = {
 };
 var NEVER = INVALID;
 
-// ../../packages/shared/src/gemini-models.ts
-var DEFAULT_GEMINI_MODEL_ID = "gemini-2.5-flash";
-var GeminiModelIdSchema = external_exports.enum([
-  "gemini-3.1-flash-lite",
-  "gemini-3.5-flash",
-  "gemini-3-flash-preview",
-  "gemini-2.5-flash",
-  "gemini-2.5-flash-lite"
+// ../../packages/shared/src/models.ts
+var DEFAULT_OPENROUTER_MODEL_ID = "minimax/minimax-m3:free";
+var OpenRouterModelIdSchema = external_exports.enum([
+  "minimax/minimax-m3:free",
+  "nvidia/nemotron-3-super-120b-a12b:free",
+  "z-ai/glm-5.2:free",
+  "google/gemma-4-31b-it:free",
+  "google/gemma-4-26b-a4b-it:free"
 ]);
-function resolveGeminiModelId(model) {
-  const parsed = GeminiModelIdSchema.safeParse(model);
-  return parsed.success ? parsed.data : DEFAULT_GEMINI_MODEL_ID;
+function resolveOpenRouterModelId(model) {
+  const parsed = OpenRouterModelIdSchema.safeParse(model);
+  return parsed.success ? parsed.data : DEFAULT_OPENROUTER_MODEL_ID;
 }
 
 // ../../packages/shared/src/name-genres.ts
@@ -4122,7 +4122,7 @@ var GenerateNamesRequestSchema = external_exports.object({
     external_exports.string().max(200).optional()
   ),
   smartPick: external_exports.boolean().optional(),
-  model: GeminiModelIdSchema.optional(),
+  model: OpenRouterModelIdSchema.optional(),
   apiKey: external_exports.string().min(10).optional()
 });
 var GenerateNamesResponseSchema = external_exports.object({
@@ -4134,8 +4134,8 @@ var GenerateNamesResponseSchema = external_exports.object({
 var SMART_PICK_MIN_SCORE = 60;
 var SMART_PICK_MIN_ACCEPTED = 3;
 var SMART_PICK_REVEAL_COUNT = 3;
-var SMART_PICK_BATCH_SIZE = 6;
-var SMART_PICK_MAX_CANDIDATES = 15;
+var SMART_PICK_BATCH_SIZE = 4;
+var SMART_PICK_MAX_CANDIDATES = 8;
 var SMART_PICK_MIN_DOMAIN_SCORE = 2 * SMART_PICK_MIN_SCORE - 100;
 var SmartPickRequestSchema = external_exports.object({
   genreId: NameGenreIdSchema,
@@ -4144,7 +4144,7 @@ var SmartPickRequestSchema = external_exports.object({
     (value) => value === null || value === "" ? void 0 : value,
     external_exports.string().max(200).optional()
   ),
-  model: GeminiModelIdSchema.optional(),
+  model: OpenRouterModelIdSchema.optional(),
   apiKey: external_exports.string().min(10).optional()
 });
 
@@ -4155,7 +4155,7 @@ var AnalyzeStreamRequestSchema = external_exports.object({
     (value) => value === null || value === "" ? void 0 : value,
     external_exports.string().max(100).optional()
   ),
-  model: GeminiModelIdSchema.optional(),
+  model: OpenRouterModelIdSchema.optional(),
   apiKey: external_exports.string().min(10).optional(),
   deepBrandSearch: external_exports.boolean().optional()
 });
@@ -4170,7 +4170,7 @@ function classifyAiApiErrorCode(message) {
   if (lower.includes("no content") || lower.includes("returned no content")) {
     return "no_content";
   }
-  if (lower.includes("gemini api error") || lower.includes("api error")) return "api_error";
+  if (lower.includes("openrouter api error") || lower.includes("api error")) return "api_error";
   return "unknown";
 }
 
@@ -4181,7 +4181,7 @@ var AnalyzeNameRequestSchema = external_exports.object({
     (value) => value === null || value === "" ? void 0 : value,
     external_exports.string().max(100).optional()
   ),
-  model: GeminiModelIdSchema.optional(),
+  model: OpenRouterModelIdSchema.optional(),
   apiKey: external_exports.string().min(10).optional(),
   deepBrandSearch: external_exports.boolean().optional()
 });
@@ -4254,9 +4254,199 @@ function applyStreamCors(req, res) {
 // src/config/features.ts
 var REGISTRATION_CHECK_ENABLED = false;
 
-// src/lib/gemini.ts
-function getGeminiGenerateUrl(modelId) {
-  return `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
+// src/lib/openrouter-api-error.ts
+var OpenRouterApiError = class extends Error {
+  code;
+  operation;
+  httpStatus;
+  constructor(message, operation, options) {
+    super(message);
+    this.name = "OpenRouterApiError";
+    this.operation = operation;
+    this.code = options?.code ?? classifyAiApiErrorCode(message);
+    this.httpStatus = options?.httpStatus;
+  }
+};
+function openRouterApiError(message, operation, options) {
+  return new OpenRouterApiError(message, operation, options);
+}
+function wrapOpenRouterFailure(error, operation) {
+  if (error instanceof OpenRouterApiError) return error;
+  if (error instanceof Error) {
+    if (error.name === "TimeoutError" || error.name === "AbortError") {
+      return openRouterApiError(error.message || "OpenRouter request timed out", operation, {
+        code: "timeout"
+      });
+    }
+    return openRouterApiError(error.message, operation);
+  }
+  return openRouterApiError("OpenRouter request failed", operation);
+}
+
+// src/lib/openrouter-throttle.ts
+var MIN_GAP_MS = 3200;
+var MAX_ATTEMPTS = 3;
+var lastCallAt = 0;
+var chain = Promise.resolve();
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+function parseRetryAfterHeader(value) {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (!Number.isNaN(seconds)) {
+    return Math.ceil(seconds * 1e3) + 500;
+  }
+  const date = Date.parse(value);
+  if (!Number.isNaN(date)) {
+    return Math.max(0, date - Date.now()) + 500;
+  }
+  return null;
+}
+function parseRetryDelayBody(body) {
+  try {
+    const parsed = JSON.parse(body);
+    const meta = parsed.error?.metadata;
+    const raw = meta?.retryDelay ?? meta?.retry_after;
+    if (raw == null) return null;
+    const seconds = typeof raw === "number" ? raw : Number.parseFloat(String(raw).replace(/s$/i, ""));
+    if (!Number.isNaN(seconds)) {
+      return Math.ceil(seconds * 1e3) + 500;
+    }
+  } catch {
+  }
+  return null;
+}
+async function waitForOpenRouterSlot() {
+  chain = chain.then(async () => {
+    const elapsed = Date.now() - lastCallAt;
+    if (elapsed < MIN_GAP_MS) {
+      await sleep(MIN_GAP_MS - elapsed);
+    }
+    lastCallAt = Date.now();
+  });
+  await chain;
+}
+async function openRouterFetch(url, init, options) {
+  const { operation, maxAttempts = MAX_ATTEMPTS } = options;
+  try {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await waitForOpenRouterSlot();
+      console.info(
+        `[openrouter] fetch start op=${operation} attempt=${attempt + 1}/${maxAttempts}`
+      );
+      const startedAt = Date.now();
+      const response = await fetch(url, init);
+      const elapsedMs = Date.now() - startedAt;
+      if (response.status !== 429) {
+        console.info(
+          `[openrouter] fetch done op=${operation} status=${response.status} elapsedMs=${elapsedMs} attempt=${attempt + 1}`
+        );
+        return response;
+      }
+      const retryFromHeader = parseRetryAfterHeader(response.headers.get("retry-after"));
+      const body = await response.text();
+      const retryMs = retryFromHeader ?? parseRetryDelayBody(body) ?? MIN_GAP_MS * (attempt + 1);
+      console.warn(
+        `[openrouter] 429 rate limit op=${operation} attempt=${attempt + 1}/${maxAttempts} retryInMs=${retryMs} body=${body.slice(0, 240)}`
+      );
+      await sleep(retryMs);
+    }
+    throw openRouterApiError("OpenRouter API rate limit exceeded after retries", operation, {
+      code: "rate_limit",
+      httpStatus: 429
+    });
+  } catch (error) {
+    console.error(
+      `[openrouter] fetch failed op=${operation} error=${error instanceof Error ? error.message : String(error)}`
+    );
+    throw wrapOpenRouterFailure(error, operation);
+  }
+}
+
+// src/lib/openrouter.ts
+var OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL?.replace(/\/$/, "") || "https://openrouter.ai/api/v1";
+var OPENROUTER_CHAT_URL = `${OPENROUTER_BASE_URL}/chat/completions`;
+var APP_URL = "https://naamkaran-ai.web.app";
+var APP_TITLE = "Naamkaran";
+function headers(apiKey) {
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+    "HTTP-Referer": APP_URL,
+    "X-Title": APP_TITLE
+  };
+}
+function extractCitations(message) {
+  const seen = /* @__PURE__ */ new Set();
+  const citations = [];
+  for (const annotation of message?.annotations ?? []) {
+    if (annotation.type !== "url_citation") continue;
+    const uri = annotation.url_citation?.url ?? "";
+    if (!uri || seen.has(uri)) continue;
+    seen.add(uri);
+    citations.push({
+      title: annotation.url_citation?.title || "Source",
+      uri
+    });
+  }
+  return citations;
+}
+async function chatCompletion(params) {
+  const body = {
+    model: params.model,
+    messages: params.messages
+  };
+  if (params.maxTokens != null) {
+    body.max_tokens = params.maxTokens;
+  }
+  if (params.jsonMode) {
+    body.response_format = { type: "json_object" };
+  }
+  if (params.webSearchMaxResults != null) {
+    body.plugins = [{ id: "web", max_results: params.webSearchMaxResults }];
+  }
+  console.info(
+    `[openrouter] chatCompletion op=${params.operation} model=${params.model} jsonMode=${Boolean(params.jsonMode)} webSearch=${params.webSearchMaxResults ?? "off"} maxTokens=${params.maxTokens ?? "default"} messages=${params.messages.length}`
+  );
+  const response = await openRouterFetch(
+    OPENROUTER_CHAT_URL,
+    {
+      method: "POST",
+      headers: headers(params.apiKey),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(params.timeoutMs ?? 6e4)
+    },
+    { operation: params.operation }
+  );
+  if (!response.ok) {
+    const errorBody = await response.text();
+    console.error(
+      `[openrouter] chatCompletion HTTP error op=${params.operation} status=${response.status} body=${errorBody.slice(0, 400)}`
+    );
+    throw openRouterApiError(
+      `OpenRouter API error ${response.status}: ${errorBody}`,
+      params.operation,
+      { httpStatus: response.status }
+    );
+  }
+  const data = await response.json();
+  if (data.error) {
+    console.error(
+      `[openrouter] chatCompletion API error op=${params.operation} message=${data.error.message ?? "unknown"}`
+    );
+    throw openRouterApiError(
+      `OpenRouter API error: ${data.error.message ?? "unknown"}`,
+      params.operation
+    );
+  }
+  const message = data.choices?.[0]?.message;
+  const text = message?.content?.trim() ?? "";
+  const citations = extractCitations(message);
+  console.info(
+    `[openrouter] chatCompletion ok op=${params.operation} model=${params.model} textChars=${text.length} citations=${citations.length}`
+  );
+  return { text, citations };
 }
 function analysisCacheKey(name, modelId, brandSearchMode = "lite") {
   return `${name.toLowerCase().trim()}:${modelId}:${brandSearchMode}`;
@@ -4633,99 +4823,16 @@ function disabledRegistrationResult(name) {
   };
 }
 
-// src/lib/gemini-api-error.ts
-var GeminiApiError = class extends Error {
-  code;
-  operation;
-  httpStatus;
-  constructor(message, operation, options) {
-    super(message);
-    this.name = "GeminiApiError";
-    this.operation = operation;
-    this.code = options?.code ?? classifyAiApiErrorCode(message);
-    this.httpStatus = options?.httpStatus;
-  }
-};
-function geminiApiError(message, operation, options) {
-  return new GeminiApiError(message, operation, options);
-}
-function wrapGeminiFailure(error, operation) {
-  if (error instanceof GeminiApiError) return error;
-  if (error instanceof Error) {
-    if (error.name === "TimeoutError" || error.name === "AbortError") {
-      return geminiApiError(error.message || "Gemini request timed out", operation, {
-        code: "timeout"
-      });
-    }
-    return geminiApiError(error.message, operation);
-  }
-  return geminiApiError("Gemini request failed", operation);
-}
-
-// src/lib/gemini-throttle.ts
-var MIN_GAP_MS = 4e3;
-var lastCallAt = 0;
-var chain = Promise.resolve();
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-function parseRetryDelayMs(body) {
-  try {
-    const parsed = JSON.parse(body);
-    for (const detail of parsed.error?.details ?? []) {
-      if (detail.retryDelay) {
-        const seconds = Number.parseFloat(detail.retryDelay.replace("s", ""));
-        if (!Number.isNaN(seconds)) {
-          return Math.ceil(seconds * 1e3) + 500;
-        }
-      }
-    }
-  } catch {
-  }
-  return null;
-}
-async function waitForGeminiSlot() {
-  chain = chain.then(async () => {
-    const elapsed = Date.now() - lastCallAt;
-    if (elapsed < MIN_GAP_MS) {
-      await sleep(MIN_GAP_MS - elapsed);
-    }
-    lastCallAt = Date.now();
-  });
-  await chain;
-}
-async function geminiFetch(url, init, options) {
-  const { operation, maxAttempts = 5 } = options;
-  try {
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      await waitForGeminiSlot();
-      const response = await fetch(url, init);
-      if (response.status !== 429) {
-        return response;
-      }
-      const body = await response.text();
-      const retryMs = parseRetryDelayMs(body) ?? MIN_GAP_MS * (attempt + 1);
-      await sleep(retryMs);
-    }
-    throw geminiApiError("Gemini API rate limit exceeded after retries", operation, {
-      code: "rate_limit",
-      httpStatus: 429
-    });
-  } catch (error) {
-    throw wrapGeminiFailure(error, operation);
-  }
-}
-
 // src/modules/seo-check.ts
 var LITE_TIMEOUT_MS = 6e4;
-var DEEP_TIMEOUT_MS = 45e3;
+var DEEP_TIMEOUT_MS = 9e4;
 var LITE_MAX_OUTPUT_TOKENS = 384;
 var DEEP_MAX_OUTPUT_TOKENS = 512;
-var BORDERLINE_LOW = 35;
-var BORDERLINE_HIGH = 65;
+var LITE_SEARCH_RESULTS = 2;
+var DEEP_SEARCH_RESULTS = 3;
 function buildLitePrompt(name, category) {
   const context = category ? ` in ${category}` : "";
-  return `One quick web search: is "${name}"${context} already a known brand, product, company, or app?
+  return `Search the web: is "${name}"${context} already a known brand, product, company, or app?
 
 Be brief. If you find a clear match, set isExistingBrand true.
 
@@ -4733,27 +4840,21 @@ Respond ONLY with JSON (no markdown): {"isExistingBrand": boolean, "confidence":
 }
 function buildDeepPrimaryPrompt(name, category) {
   const categorySearch = category ? `3. "${name}" ${category} company or product in India` : `3. "${name}" India startup or company`;
-  return `Run separate web searches for the name "${name}":
+  return `Search the web thoroughly for the name "${name}":
 1. Exact match \u2014 is this already a known brand, product, or company name?
 2. "${name}" startup OR app OR software OR SaaS \u2014 any active businesses using this name?
 ${categorySearch}
+4. Official website, app store, Crunchbase, LinkedIn company page, or news coverage as an established business.
 
 Synthesize all angles. If any search finds a clear existing brand or product, set isExistingBrand to true and reflect that in confidence.
-
-Respond ONLY with JSON (no markdown): {"isExistingBrand": boolean, "confidence": 0-100, "summary": "1-2 sentence explanation", "competitors": ["name1", "name2"]}`;
-}
-function buildDeepFollowUpPrompt(name, category) {
-  const context = category ? ` in the ${category} space` : "";
-  return `Search whether "${name}"${context} has an official website, app store listing, Crunchbase profile, LinkedIn company page, or news coverage as an established business.
-
-Focus on distinguishing real brands from generic/unrelated word matches.
+Distinguish real brands from generic/unrelated word matches.
 
 Respond ONLY with JSON (no markdown): {"isExistingBrand": boolean, "confidence": 0-100, "summary": "1-2 sentence explanation", "competitors": ["name1", "name2"]}`;
 }
 function tryParseJsonObject(candidate) {
   try {
     const parsed = JSON.parse(candidate);
-    return normalizeGeminiPayload(parsed);
+    return normalizePayload(parsed);
   } catch {
     return null;
   }
@@ -4769,7 +4870,7 @@ function repairTruncatedJsonCandidates(candidate) {
     `${trimmed}"]}}`
   ];
 }
-function extractGeminiFieldsRegex(text) {
+function extractFieldsRegex(text) {
   const isBrandMatch = text.match(/"isExistingBrand"\s*:\s*(true|false)/i);
   const confMatch = text.match(/"confidence"\s*:\s*(\d+)/);
   const summaryMatch = text.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)(?:"|$)/s);
@@ -4795,7 +4896,7 @@ function fallbackSummary(name, isExistingBrand, confidence) {
   }
   return `"${name}" does not appear to be a widely known brand in quick search results.`;
 }
-function normalizeGeminiPayload(parsed) {
+function normalizePayload(parsed) {
   return {
     isExistingBrand: Boolean(parsed.isExistingBrand),
     confidence: Math.min(100, Math.max(0, Number(parsed.confidence) || 0)),
@@ -4803,7 +4904,7 @@ function normalizeGeminiPayload(parsed) {
     competitors: parsed.competitors
   };
 }
-function parseGeminiJson(text, name) {
+function parseSeoJson(text, name) {
   const cleaned = text.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
   const jsonMatch = cleaned.match(/\{[\s\S]*/);
   const candidate = jsonMatch?.[0] ?? cleaned;
@@ -4817,7 +4918,7 @@ function parseGeminiJson(text, name) {
       return { payload: parsed, quality: "full" };
     }
   }
-  const extracted = extractGeminiFieldsRegex(candidate);
+  const extracted = extractFieldsRegex(candidate);
   if (extracted) {
     const payload = {
       ...extracted,
@@ -4844,92 +4945,31 @@ function parseGeminiJson(text, name) {
     quality: "failed"
   };
 }
-function extractSources(chunks) {
-  const seen = /* @__PURE__ */ new Set();
-  const sources = [];
-  for (const chunk of chunks ?? []) {
-    const uri = chunk.web?.uri ?? "";
-    if (!uri || seen.has(uri)) continue;
-    seen.add(uri);
-    sources.push({
-      title: chunk.web?.title ?? "Source",
-      uri
-    });
-  }
-  return sources;
+function toSeoSources(citations) {
+  return citations.map((citation) => ({ title: citation.title, uri: citation.uri }));
 }
-async function callGeminiText(apiKey, prompt, modelId, maxOutputTokens) {
-  const response = await geminiFetch(
-    `${getGeminiGenerateUrl(modelId)}?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens }
-      }),
-      signal: AbortSignal.timeout(15e3)
-    },
-    { operation: "brand_search" }
-  );
-  if (!response.ok) {
-    return "";
-  }
-  const data = await response.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
-}
-async function writeBrandSummary(apiKey, name, payload, sources, modelId) {
-  const sourceHint = sources.slice(0, 5).map((s) => s.title).join(", ");
-  const generated = await callGeminiText(
+async function executeSearch(apiKey, prompt, modelId, mode) {
+  const { text, citations } = await chatCompletion({
     apiKey,
-    `Write one clear sentence about brand uniqueness for the name "${name}".
-Existing brand: ${payload.isExistingBrand}
-Confidence: ${payload.confidence}%
-${sourceHint ? `Sources: ${sourceHint}` : ""}
-
-Reply with only the summary sentence.`,
-    modelId,
-    128
-  );
-  if (generated && !isWeakSummary(generated)) {
-    return generated;
-  }
-  return fallbackSummary(name, payload.isExistingBrand, payload.confidence);
-}
-async function executeGeminiSearch(apiKey, prompt, modelId, mode) {
-  const response = await geminiFetch(
-    `${getGeminiGenerateUrl(modelId)}?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        tools: [{ google_search: {} }],
-        generationConfig: {
-          maxOutputTokens: mode === "deep" ? DEEP_MAX_OUTPUT_TOKENS : LITE_MAX_OUTPUT_TOKENS
-        }
-      }),
-      signal: AbortSignal.timeout(mode === "deep" ? DEEP_TIMEOUT_MS : LITE_TIMEOUT_MS)
-    },
-    { operation: "brand_search" }
-  );
-  if (!response.ok) {
-    return null;
-  }
-  const data = await response.json();
-  const candidate = data.candidates?.[0];
-  const text = candidate?.content?.parts?.[0]?.text;
+    model: modelId,
+    operation: "brand_search",
+    maxTokens: mode === "deep" ? DEEP_MAX_OUTPUT_TOKENS : LITE_MAX_OUTPUT_TOKENS,
+    timeoutMs: mode === "deep" ? DEEP_TIMEOUT_MS : LITE_TIMEOUT_MS,
+    jsonMode: true,
+    webSearchMaxResults: mode === "deep" ? DEEP_SEARCH_RESULTS : LITE_SEARCH_RESULTS,
+    messages: [{ role: "user", content: prompt }]
+  });
   if (!text) {
     return null;
   }
-  return {
-    text,
-    sources: extractSources(candidate.groundingMetadata?.groundingChunks)
-  };
+  return { text, sources: toSeoSources(citations) };
 }
-async function callGeminiSearch(apiKey, prompt, name, modelId, mode) {
-  const raw = await executeGeminiSearch(apiKey, prompt, modelId, mode);
+async function runSearch(apiKey, prompt, name, modelId, mode) {
+  const raw = await executeSearch(apiKey, prompt, modelId, mode);
   if (!raw) {
+    console.warn(
+      `[seo-check] empty model response name=${name} mode=${mode} model=${modelId}`
+    );
     return {
       payload: {
         isExistingBrand: false,
@@ -4940,59 +4980,24 @@ async function callGeminiSearch(apiKey, prompt, name, modelId, mode) {
       sources: []
     };
   }
-  let { payload, quality } = parseGeminiJson(raw.text, name);
-  let sources = raw.sources;
-  if (quality !== "full" || isWeakSummary(payload.summary)) {
+  let { payload, quality } = parseSeoJson(raw.text, name);
+  const sources = raw.sources;
+  console.info(
+    `[seo-check] parsed name=${name} quality=${quality} isExistingBrand=${payload.isExistingBrand} confidence=${payload.confidence} sources=${sources.length} textChars=${raw.text.length}`
+  );
+  if (isWeakSummary(payload.summary)) {
     payload = {
       ...payload,
-      summary: await writeBrandSummary(apiKey, name, payload, sources, modelId)
+      summary: fallbackSummary(name, payload.isExistingBrand, payload.confidence)
     };
   }
   return { payload, sources };
-}
-function mergeSources(...sourceLists) {
-  const seen = /* @__PURE__ */ new Set();
-  const merged = [];
-  for (const sources of sourceLists) {
-    for (const source of sources) {
-      if (seen.has(source.uri)) continue;
-      seen.add(source.uri);
-      merged.push(source);
-    }
-  }
-  return merged;
-}
-function mergePayloads(primary, secondary) {
-  const isExistingBrand = primary.isExistingBrand || secondary.isExistingBrand;
-  let confidence;
-  if (isExistingBrand) {
-    const brandConfidences = [primary, secondary].filter((p) => p.isExistingBrand).map((p) => p.confidence);
-    confidence = Math.max(...brandConfidences, 0);
-  } else {
-    confidence = Math.round((primary.confidence + secondary.confidence) / 2);
-  }
-  const competitors = [...primary.competitors ?? [], ...secondary.competitors ?? []].filter(
-    (value, index, array) => array.indexOf(value) === index
-  );
-  const summary = primary.summary === secondary.summary ? primary.summary : `${primary.summary} ${secondary.summary}`.trim();
-  return {
-    isExistingBrand,
-    confidence,
-    summary,
-    competitors: competitors.length > 0 ? competitors : void 0
-  };
 }
 function computeSeoScore(isExistingBrand, confidence) {
   if (isExistingBrand) {
     return Math.max(0, Math.round(100 - confidence));
   }
   return Math.max(confidence, 85);
-}
-function isBorderline(confidence, isExistingBrand) {
-  if (isExistingBrand) {
-    return confidence < BORDERLINE_HIGH;
-  }
-  return confidence > BORDERLINE_LOW && confidence < BORDERLINE_HIGH;
 }
 function isSearchTimeout(error) {
   if (!(error instanceof Error)) return false;
@@ -5027,7 +5032,7 @@ function toSeoResult(payload, sources) {
   };
 }
 async function seoCheckLite(name, apiKey, category, model) {
-  const { payload, sources } = await callGeminiSearch(
+  const { payload, sources } = await runSearch(
     apiKey,
     buildLitePrompt(name, category),
     name,
@@ -5037,39 +5042,33 @@ async function seoCheckLite(name, apiKey, category, model) {
   return toSeoResult(payload, sources);
 }
 async function seoCheckDeep(name, apiKey, category, model) {
-  const primary = await callGeminiSearch(
+  const { payload, sources } = await runSearch(
     apiKey,
     buildDeepPrimaryPrompt(name, category),
     name,
     model,
     "deep"
   );
-  let payload = primary.payload;
-  let sources = primary.sources;
-  if (isBorderline(primary.payload.confidence, primary.payload.isExistingBrand)) {
-    const followUp = await callGeminiSearch(
-      apiKey,
-      buildDeepFollowUpPrompt(name, category),
-      name,
-      model,
-      "deep"
-    );
-    payload = mergePayloads(primary.payload, followUp.payload);
-    sources = mergeSources(primary.sources, followUp.sources);
-  }
   return toSeoResult(payload, sources);
 }
 async function seoCheck(name, apiKey, category, modelId, mode = "lite") {
-  const model = resolveGeminiModelId(modelId);
+  const model = resolveOpenRouterModelId(modelId);
+  console.info(`[seo-check] start name=${name} mode=${mode} model=${model}`);
   try {
-    if (mode === "deep") {
-      return await seoCheckDeep(name, apiKey, category, model);
-    }
-    return await seoCheckLite(name, apiKey, category, model);
+    const result = mode === "deep" ? await seoCheckDeep(name, apiKey, category, model) : await seoCheckLite(name, apiKey, category, model);
+    console.info(
+      `[seo-check] done name=${name} score=${result.score} isExistingBrand=${result.isExistingBrand} confidence=${result.confidence} sources=${result.sources.length}`
+    );
+    return result;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     if (isSearchTimeout(error)) {
+      console.warn(`[seo-check] timeout name=${name} mode=${mode} error=${message}`);
       return timedOutSeoResult(mode);
     }
+    console.error(
+      `[seo-check] unavailable fallback name=${name} mode=${mode} error=${message}`
+    );
     return unavailableSeoResult(name);
   }
 }
@@ -5080,10 +5079,10 @@ function computeCompositeScore(domainScore, seoScore) {
   return Math.round(composite);
 }
 async function analyzeName(name, secrets2, category, modelId, brandSearchMode = "lite") {
-  const model = resolveGeminiModelId(modelId);
+  const model = resolveOpenRouterModelId(modelId);
   const [domain, seo] = await Promise.all([
     domainCheck(name),
-    seoCheck(name, secrets2.googleAiKey, category, model, brandSearchMode)
+    seoCheck(name, secrets2.openRouterKey, category, model, brandSearchMode)
   ]);
   const registration = REGISTRATION_CHECK_ENABLED ? await registrationCheck(name, secrets2.dataGovKey) : disabledRegistrationResult(name);
   return {
@@ -5095,7 +5094,7 @@ async function analyzeName(name, secrets2, category, modelId, brandSearchMode = 
   };
 }
 async function analyzeNameWithProgress(name, secrets2, category, onProgress, modelId, options) {
-  const model = resolveGeminiModelId(modelId);
+  const model = resolveOpenRouterModelId(modelId);
   const brandSearchMode = options?.brandSearchMode ?? "lite";
   const cacheKey = analysisCacheKey(name, model, brandSearchMode);
   const cached = await getCachedAnalysis(cacheKey);
@@ -5125,7 +5124,7 @@ async function analyzeNameWithProgress(name, secrets2, category, onProgress, mod
   } else {
     onProgress({ type: "seo_start", name });
     try {
-      seo = await seoCheck(name, secrets2.googleAiKey, category, model, brandSearchMode);
+      seo = await seoCheck(name, secrets2.openRouterKey, category, model, brandSearchMode);
       onProgress({ type: "seo_done", name, seo });
     } catch {
       onProgress({ type: "seo_failed", name, message: "Brand search could not be completed." });
@@ -5152,7 +5151,7 @@ async function analyzeNameWithProgress(name, secrets2, category, onProgress, mod
 
 // src/modules/analyze-stream.ts
 async function runAnalyzeStream(name, secrets2, category, modelId, emit, brandSearchMode = "lite") {
-  const model = resolveGeminiModelId(modelId);
+  const model = resolveOpenRouterModelId(modelId);
   const cacheKey = analysisCacheKey(name, model, brandSearchMode);
   const cached = await getCachedAnalysis(cacheKey);
   if (cached) {
@@ -5480,7 +5479,7 @@ Tailor every name to this context while obeying all genre rules above.` : "";
   const smartPickNote = smartPick ? `
 
 ## Smart pick viability rules (active \u2014 every name will be auto-checked)
-- Each name is scored for domain availability (.com, .in, etc.) and existing brands via Google search.
+- Each name is scored for domain availability (.com, .in, etc.) and existing brands via web search.
 - Only names scoring 60+ are kept. Favor names likely to pass:
   - Coined or altered spellings \u2014 not plain dictionary words big companies already own.
   - No overlap with known products, apps, startups, or brands in the user's space.
@@ -5515,7 +5514,7 @@ function parseResponse(text, minCount) {
   };
 }
 async function generateNames(genreId, messages, apiKey, context, smartPick, excludeNames, modelId) {
-  const model = resolveGeminiModelId(modelId);
+  const model = resolveOpenRouterModelId(modelId);
   const nameCount = smartPick ? SMART_PICK_BATCH_SIZE : resolveNameCount(messages);
   const systemPrompt = buildSystemPrompt(
     genreId,
@@ -5524,41 +5523,33 @@ async function generateNames(genreId, messages, apiKey, context, smartPick, excl
     smartPick,
     excludeNames
   );
-  const contents = messages.map((msg) => ({
-    role: msg.role === "assistant" ? "model" : "user",
-    parts: [{ text: msg.content }]
-  }));
-  const response = await geminiFetch(
-    `${getGeminiGenerateUrl(model)}?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        contents,
-        generationConfig: { responseMimeType: "application/json" }
-      }),
-      signal: AbortSignal.timeout(6e4)
-    },
-    { operation: "name_generate" }
-  );
-  if (!response.ok) {
-    const body = await response.text();
-    throw geminiApiError(`Gemini API error ${response.status}: ${body}`, "name_generate", {
-      httpStatus: response.status
-    });
-  }
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  const chatMessages = [
+    { role: "system", content: systemPrompt },
+    ...messages.map((msg) => ({
+      role: msg.role === "assistant" ? "assistant" : "user",
+      content: msg.content
+    }))
+  ];
+  const { text } = await chatCompletion({
+    apiKey,
+    model,
+    messages: chatMessages,
+    operation: "name_generate",
+    jsonMode: true,
+    maxTokens: 1024,
+    timeoutMs: 6e4
+  });
   if (!text) {
-    throw geminiApiError("Gemini returned no content", "name_generate", { code: "no_content" });
+    throw openRouterApiError("OpenRouter returned no content", "name_generate", {
+      code: "no_content"
+    });
   }
   return parseResponse(text, nameCount);
 }
 
 // src/modules/smart-pick-stream.ts
 async function runSmartPickStream(genreId, messages, apiKey, context, emit, modelId) {
-  const model = resolveGeminiModelId(modelId);
+  const model = resolveOpenRouterModelId(modelId);
   const tried = /* @__PURE__ */ new Set();
   const accepted = [];
   const rejected = [];
@@ -5600,7 +5591,7 @@ async function runSmartPickStream(genreId, messages, apiKey, context, emit, mode
     try {
       const result = await analyzeNameWithProgress(
         name,
-        { googleAiKey: apiKey },
+        { openRouterKey: apiKey },
         context,
         (step) => {
           if (step.type === "domain_start") {
@@ -5658,9 +5649,9 @@ async function runSmartPickStream(genreId, messages, apiKey, context, emit, mode
 // src/index.ts
 (0, import_app.initializeApp)();
 (0, import_v2.setGlobalOptions)({ maxInstances: 10 });
-var googleAiKey = (0, import_params.defineSecret)("GOOGLE_AI_STUDIO_KEY");
+var openRouterKey = (0, import_params.defineSecret)("OPENROUTER_API_KEY");
 var dataGovKey = (0, import_params.defineSecret)("DATA_GOV_IN_API_KEY");
-var secrets = REGISTRATION_CHECK_ENABLED ? [googleAiKey, dataGovKey] : [googleAiKey];
+var secrets = REGISTRATION_CHECK_ENABLED ? [openRouterKey, dataGovKey] : [openRouterKey];
 function writeSseEvent(res, event) {
   res.write(`data: ${JSON.stringify(event)}
 
@@ -5668,11 +5659,11 @@ function writeSseEvent(res, event) {
 }
 function resolveAiKey(requestKey) {
   if (requestKey) return requestKey;
-  const serverKey = googleAiKey.value();
+  const serverKey = openRouterKey.value();
   if (!serverKey) {
     throw new import_https.HttpsError(
       "failed-precondition",
-      "API key is not configured. Set GOOGLE_AI_STUDIO_KEY secret or provide your own key."
+      "API key is not configured. Set OPENROUTER_API_KEY secret or provide your own key."
     );
   }
   return serverKey;
@@ -5682,7 +5673,7 @@ function resolveBrandSearchMode(requestApiKey, deepBrandSearch) {
 }
 function resolveAiKeyOrNull(requestKey) {
   if (requestKey) return requestKey;
-  return googleAiKey.value() || null;
+  return openRouterKey.value() || null;
 }
 var analyzeName2 = (0, import_https.onCall)(
   {
@@ -5697,9 +5688,9 @@ var analyzeName2 = (0, import_https.onCall)(
       throw new import_https.HttpsError("invalid-argument", "Invalid request", parsed.error.flatten());
     }
     const { name, category, model, apiKey: requestApiKey, deepBrandSearch } = parsed.data;
-    const geminiModel = resolveGeminiModelId(model);
+    const resolvedModel = resolveOpenRouterModelId(model);
     const brandSearchMode = resolveBrandSearchMode(requestApiKey, deepBrandSearch);
-    const cacheKey = analysisCacheKey(name, geminiModel, brandSearchMode);
+    const cacheKey = analysisCacheKey(name, resolvedModel, brandSearchMode);
     const cached = await getCachedAnalysis(cacheKey);
     if (cached) return cached;
     const aiKey = resolveAiKey(requestApiKey);
@@ -5713,9 +5704,9 @@ var analyzeName2 = (0, import_https.onCall)(
     try {
       const result = await analyzeName(
         name,
-        { googleAiKey: aiKey, dataGovKey: govKey },
+        { openRouterKey: aiKey, dataGovKey: govKey },
         category,
-        geminiModel,
+        resolvedModel,
         brandSearchMode
       );
       await setCachedAnalysis(cacheKey, result);
@@ -5729,7 +5720,7 @@ var analyzeName2 = (0, import_https.onCall)(
 var generateNamesHttp = (0, import_https.onRequest)(
   {
     ...PUBLIC_CORS_OPTIONS,
-    secrets: [googleAiKey],
+    secrets: [openRouterKey],
     timeoutSeconds: 60,
     memory: "256MiB"
   },
@@ -5746,7 +5737,7 @@ var generateNamesHttp = (0, import_https.onRequest)(
     }
     const aiKey = resolveAiKeyOrNull(parsed.data.apiKey);
     if (!aiKey) {
-      res.status(500).json({ error: "GOOGLE_AI_STUDIO_KEY is not configured" });
+      res.status(500).json({ error: "OPENROUTER_API_KEY is not configured" });
       return;
     }
     try {
@@ -5787,7 +5778,7 @@ var analyzeNameStream = (0, import_https.onRequest)(
     }
     const aiKey = resolveAiKeyOrNull(parsed.data.apiKey);
     if (!aiKey) {
-      res.status(500).json({ error: "GOOGLE_AI_STUDIO_KEY is not configured" });
+      res.status(500).json({ error: "OPENROUTER_API_KEY is not configured" });
       return;
     }
     const govKey = REGISTRATION_CHECK_ENABLED ? dataGovKey.value() : void 0;
@@ -5797,7 +5788,7 @@ var analyzeNameStream = (0, import_https.onRequest)(
     res.flushHeaders?.();
     await runAnalyzeStream(
       parsed.data.name,
-      { googleAiKey: aiKey, dataGovKey: govKey },
+      { openRouterKey: aiKey, dataGovKey: govKey },
       parsed.data.category,
       parsed.data.model,
       (event) => writeSseEvent(res, event),
@@ -5809,7 +5800,7 @@ var analyzeNameStream = (0, import_https.onRequest)(
 var smartPickStream = (0, import_https.onRequest)(
   {
     ...PUBLIC_CORS_OPTIONS,
-    secrets: [googleAiKey],
+    secrets: [openRouterKey],
     timeoutSeconds: 540,
     memory: "512MiB"
   },
@@ -5826,7 +5817,7 @@ var smartPickStream = (0, import_https.onRequest)(
     }
     const aiKey = resolveAiKeyOrNull(parsed.data.apiKey);
     if (!aiKey) {
-      res.status(500).json({ error: "GOOGLE_AI_STUDIO_KEY is not configured" });
+      res.status(500).json({ error: "OPENROUTER_API_KEY is not configured" });
       return;
     }
     res.setHeader("Content-Type", "text/event-stream");

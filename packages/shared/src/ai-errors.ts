@@ -27,7 +27,7 @@ export function classifyAiApiErrorCode(message: string): AiApiErrorCode {
   if (lower.includes("no content") || lower.includes("returned no content")) {
     return "no_content";
   }
-  if (lower.includes("gemini api error") || lower.includes("api error")) return "api_error";
+  if (lower.includes("openrouter api error") || lower.includes("api error")) return "api_error";
   return "unknown";
 }
 

@@ -1,14 +1,14 @@
-import type { GeminiModelId } from "@naamkaran/shared";
-import { GEMINI_MODELS } from "@naamkaran/shared";
+import type { OpenRouterModelId } from "@naamkaran/shared";
+import { OPENROUTER_MODELS } from "@naamkaran/shared";
 import { useEffect, useState } from "react";
 
 interface ByokDialogProps {
   open: boolean;
   initialKey: string;
-  initialModelId: GeminiModelId;
+  initialModelId: OpenRouterModelId;
   initialDeepBrandSearch: boolean;
   onClose: () => void;
-  onSave: (apiKey: string, modelId: GeminiModelId, deepBrandSearch: boolean) => void;
+  onSave: (apiKey: string, modelId: OpenRouterModelId, deepBrandSearch: boolean) => void;
   onClear: () => void;
 }
 
@@ -22,7 +22,7 @@ export function ByokDialog({
   onClear,
 }: ByokDialogProps) {
   const [keyInput, setKeyInput] = useState(initialKey);
-  const [modelId, setModelId] = useState<GeminiModelId>(initialModelId);
+  const [modelId, setModelId] = useState<OpenRouterModelId>(initialModelId);
   const [deepBrandSearch, setDeepBrandSearch] = useState(initialDeepBrandSearch);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,7 +39,7 @@ export function ByokDialog({
   function handleSave() {
     const trimmed = keyInput.trim();
     if (trimmed.length < 10) {
-      setError("Enter a valid Gemini API key.");
+      setError("Enter a valid OpenRouter API key.");
       return;
     }
     onSave(trimmed, modelId, deepBrandSearch);
@@ -65,12 +65,12 @@ export function ByokDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <h2 id="byok-dialog-title" className="text-lg font-semibold text-slate-900">
-          Use your Gemini API key
+          Use your OpenRouter API key
         </h2>
         <p className="mt-1.5 text-sm text-slate-600">
           Optional — without a key, Naamkaran uses a shared hosted key with daily limits.{" "}
           <a
-            href="https://aistudio.google.com/apikey"
+            href="https://openrouter.ai/keys"
             target="_blank"
             rel="noopener noreferrer"
             className="text-indigo-600 hover:underline"
@@ -82,7 +82,7 @@ export function ByokDialog({
         <div className="mt-4 space-y-4">
           <div>
             <label htmlFor="byok-api-key" className="text-sm font-medium text-slate-700">
-              Gemini API key
+              OpenRouter API key
             </label>
             <input
               id="byok-api-key"
@@ -92,7 +92,7 @@ export function ByokDialog({
                 setKeyInput(e.target.value);
                 setError(null);
               }}
-              placeholder="AIza…"
+              placeholder="sk-or-v1-…"
               autoComplete="off"
               className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
             />
@@ -105,10 +105,10 @@ export function ByokDialog({
             <select
               id="byok-model"
               value={modelId}
-              onChange={(e) => setModelId(e.target.value as GeminiModelId)}
+              onChange={(e) => setModelId(e.target.value as OpenRouterModelId)}
               className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
             >
-              {GEMINI_MODELS.map((model) => (
+              {OPENROUTER_MODELS.map((model) => (
                 <option key={model.id} value={model.id}>
                   {model.label}
                 </option>
@@ -126,7 +126,7 @@ export function ByokDialog({
             <span className="text-sm text-slate-700">
               <span className="font-medium text-slate-900">Deep brand search</span>
               <span className="mt-0.5 block text-slate-500">
-                Slower, multi-angle Google search on your key.
+                Slower, multi-angle web search on your key.
               </span>
             </span>
           </label>

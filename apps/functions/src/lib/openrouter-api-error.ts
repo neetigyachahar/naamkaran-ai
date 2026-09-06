@@ -4,7 +4,7 @@ import {
   type AiApiOperation,
 } from "@naamkaran/shared";
 
-export class GeminiApiError extends Error {
+export class OpenRouterApiError extends Error {
   readonly code: AiApiErrorCode;
   readonly operation: AiApiOperation;
   readonly httpStatus?: number;
@@ -15,35 +15,35 @@ export class GeminiApiError extends Error {
     options?: { code?: AiApiErrorCode; httpStatus?: number },
   ) {
     super(message);
-    this.name = "GeminiApiError";
+    this.name = "OpenRouterApiError";
     this.operation = operation;
     this.code = options?.code ?? classifyAiApiErrorCode(message);
     this.httpStatus = options?.httpStatus;
   }
 }
 
-export function geminiApiError(
+export function openRouterApiError(
   message: string,
   operation: AiApiOperation,
   options?: { code?: AiApiErrorCode; httpStatus?: number },
-): GeminiApiError {
-  return new GeminiApiError(message, operation, options);
+): OpenRouterApiError {
+  return new OpenRouterApiError(message, operation, options);
 }
 
-export function wrapGeminiFailure(
+export function wrapOpenRouterFailure(
   error: unknown,
   operation: AiApiOperation,
-): GeminiApiError {
-  if (error instanceof GeminiApiError) return error;
+): OpenRouterApiError {
+  if (error instanceof OpenRouterApiError) return error;
 
   if (error instanceof Error) {
     if (error.name === "TimeoutError" || error.name === "AbortError") {
-      return geminiApiError(error.message || "Gemini request timed out", operation, {
+      return openRouterApiError(error.message || "OpenRouter request timed out", operation, {
         code: "timeout",
       });
     }
-    return geminiApiError(error.message, operation);
+    return openRouterApiError(error.message, operation);
   }
 
-  return geminiApiError("Gemini request failed", operation);
+  return openRouterApiError("OpenRouter request failed", operation);
 }

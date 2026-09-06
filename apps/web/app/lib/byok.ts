@@ -1,4 +1,4 @@
-const STORAGE_KEY = "naamkaran-gemini-byok";
+const STORAGE_KEY = "naamkaran-openrouter-byok";
 
 export function loadByokKey(): string | null {
   if (typeof window === "undefined") return null;
