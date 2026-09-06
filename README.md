@@ -17,7 +17,7 @@ Turborepo monorepo for the name viability checker (`naamkaran-407d7`).
 ## Apps
 
 - `apps/web` — React Router (static SPA) hosted on Firebase Hosting
-- `apps/functions` — Firebase Cloud Functions (TypeScript) with `analyzeName` callable
+- `apps/functions` — Firebase Cloud Functions (TypeScript) with `analyzeName` callable, powered by free [OpenRouter](https://openrouter.ai) models
 - `packages/shared` — Zod schemas shared between web and functions
 
 ## Getting started
@@ -32,10 +32,16 @@ bun run build
 **Functions** (Firebase Secret Manager):
 
 ```bash
-firebase functions:secrets:set GOOGLE_AI_STUDIO_KEY
+# Get a key at https://openrouter.ai/keys
+firebase functions:secrets:set OPENROUTER_API_KEY
 # Only needed when registration checks are enabled:
 firebase functions:secrets:set DATA_GOV_IN_API_KEY
 ```
+
+Users can also bring their own OpenRouter key (BYOK) from the app header. The
+model defaults to free `:free` models (e.g. `minimax/minimax-m3:free`); note
+that OpenRouter's web-search step for brand checks bills a small per-query cost
+to whichever key is used, even when the model itself is free.
 
 **Web** — copy `apps/web/.env.example` to `apps/web/.env` and fill in Firebase config from the console.
 
@@ -62,7 +68,7 @@ bun run deploy
 `analyzeName` runs checks in parallel:
 
 1. **Domain** — RDAP (IANA bootstrap) with WHOIS fallback
-2. **Brand uniqueness** — Gemini 2.5 Flash with Google Search grounding (multi-angle search)
+2. **Brand uniqueness** — a free OpenRouter model grounded with OpenRouter's web-search plugin (multi-angle search, cited sources)
 
 Composite score: domain 35% + brand 35% + MCA name forms 30%.
 

@@ -1,6 +1,6 @@
 import type {
   AnalyzeNameResponse,
-  GeminiModelId,
+  OpenRouterModelId,
   SmartPickEvent,
   SmartPickRequest,
 } from "@naamkaran/shared";
@@ -188,7 +188,7 @@ function applyEvent(state: SmartPickState, event: SmartPickEvent): SmartPickStat
 
 export async function streamSmartPick(
   request: SmartPickRequest,
-  modelId: GeminiModelId,
+  modelId: OpenRouterModelId,
   onUpdate: (state: SmartPickState) => void,
   signal?: AbortSignal,
   apiKey?: string,

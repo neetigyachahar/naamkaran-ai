@@ -1,9 +1,9 @@
-import type { GeminiModelId } from "@naamkaran/shared";
+import type { OpenRouterModelId } from "@naamkaran/shared";
 import type { AiApiOperation } from "@naamkaran/shared";
 import { reportAiApiError, reportAiApiHttpFailure } from "./ai-api-errors";
 
 export interface AiClientContext {
-  modelId?: GeminiModelId;
+  modelId?: OpenRouterModelId;
   genreId?: string;
   hasByok?: boolean;
   smartPick?: boolean;

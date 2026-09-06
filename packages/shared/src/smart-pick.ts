@@ -1,13 +1,15 @@
 import { z } from "zod";
-import { GeminiModelIdSchema } from "./gemini-models.js";
+import { OpenRouterModelIdSchema } from "./models.js";
 import { ChatMessageSchema, NameGenreIdSchema } from "./name-genres.js";
 import type { AnalyzeNameResponse } from "./types.js";
 
 export const SMART_PICK_MIN_SCORE = 60;
 export const SMART_PICK_MIN_ACCEPTED = 3;
 export const SMART_PICK_REVEAL_COUNT = 3;
-export const SMART_PICK_BATCH_SIZE = 6;
-export const SMART_PICK_MAX_CANDIDATES = 15;
+/** Keep batches small so one generate call usually covers the reveal target. */
+export const SMART_PICK_BATCH_SIZE = 4;
+/** Cap how many names we analyze per run to stay within free RPM/RPD. */
+export const SMART_PICK_MAX_CANDIDATES = 8;
 
 /** Skip brand search when domain is too weak to reach SMART_PICK_MIN_SCORE (50/50 domain+seo weights). */
 export const SMART_PICK_MIN_DOMAIN_SCORE = 2 * SMART_PICK_MIN_SCORE - 100;
@@ -19,7 +21,7 @@ export const SmartPickRequestSchema = z.object({
     (value) => (value === null || value === "" ? undefined : value),
     z.string().max(200).optional(),
   ),
-  model: GeminiModelIdSchema.optional(),
+  model: OpenRouterModelIdSchema.optional(),
   apiKey: z.string().min(10).optional(),
 });
 
