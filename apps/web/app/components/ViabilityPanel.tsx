@@ -19,6 +19,7 @@ import {
   availabilityLabel,
   ExpandableCard,
   ScoreRing,
+  ScoreRingSpinner,
   scoreColor,
   scoreLabel,
 } from "./viability-ui";
@@ -102,7 +103,7 @@ function BrandSection({
         <div className="flex items-center justify-between">
           <div>
             <h3 className="font-semibold text-slate-900">Brand uniqueness</h3>
-            <p className="text-xs text-slate-500">Weight {WEIGHT_BRAND}</p>
+            <p className="text-xs text-slate-500">Weight {WEIGHT_BRAND} · Tap for details</p>
           </div>
         </div>
         <p className="mt-4 border-t border-rose-200/80 pt-4 text-sm text-rose-700">
@@ -125,28 +126,18 @@ function BrandSection({
   return null;
 }
 
-function SkeletonBar({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded bg-slate-200 ${className}`} />;
-}
-
 function ModuleCardSkeleton({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="flex items-center justify-between">
-        <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 space-y-1">
           <p className="font-semibold text-slate-900">{title}</p>
-          {subtitle ? (
-            <p className="text-xs text-indigo-600">{subtitle}</p>
-          ) : (
-            <SkeletonBar className="h-3 w-16" />
-          )}
+          <p className="text-xs text-indigo-600">{subtitle ?? "Checking…"}</p>
         </div>
-        <SkeletonBar className="h-10 w-10 rounded-full" />
-      </div>
-      <div className="mt-4 space-y-2 border-t border-slate-100 pt-4">
-        <SkeletonBar className="h-10 w-full" />
-        <SkeletonBar className="h-10 w-full" />
-        <SkeletonBar className="h-10 w-5/6" />
+        <div
+          className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-slate-200 border-t-indigo-500"
+          aria-hidden
+        />
       </div>
     </section>
   );
@@ -162,7 +153,11 @@ function DomainResults({
   const slug = brandNameToDomainSlug(parseBrandName(name).brandName);
 
   return (
-    <ExpandableCard title="Domain availability" score={domain.score} weight={WEIGHT_DOMAIN}>
+    <ExpandableCard
+      title="Domain availability"
+      score={domain.score}
+      weight={WEIGHT_DOMAIN}
+    >
       <ul className="space-y-1.5">
         {domain.results.map((d) => (
           <li
@@ -198,7 +193,12 @@ function BrandResults({
   deepBrandSearch: boolean;
 }) {
   return (
-    <ExpandableCard title="Brand uniqueness" score={seo.score} weight={WEIGHT_BRAND}>
+    <ExpandableCard
+      title="Brand uniqueness"
+      score={seo.score}
+      weight={WEIGHT_BRAND}
+      defaultOpen
+    >
       <p className="text-xs font-medium text-slate-400">
         {brandSearchModeLabel(deepBrandSearch)}
       </p>
@@ -228,7 +228,11 @@ function BrandResults({
   );
 }
 
-function RegistrationResults({ registration }: { registration: RegistrationResult }) {
+function RegistrationResults({
+  registration,
+}: {
+  registration: RegistrationResult;
+}) {
   if (registration.disabled) return null;
 
   const variants = registration.variants ?? [];
@@ -303,12 +307,17 @@ function ViabilityContent({
   registrationPending: boolean;
   deepBrandSearch: boolean;
 }) {
+  const checking =
+    domainPending || seoPending || registrationPending || compositeScore == null;
+
   return (
     <div className="space-y-4 p-4 sm:p-5">
       <header className="flex flex-col items-start gap-4 rounded-xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:p-5">
         {compositeScore != null ? (
           <ScoreRing score={compositeScore} size="lg" />
-        ) : null}
+        ) : (
+          <ScoreRingSpinner size="lg" />
+        )}
         <div className="min-w-0">
           <h3 className="truncate text-xl font-bold text-slate-900 sm:text-2xl">{name}</h3>
           <HeaderStatus
@@ -319,26 +328,58 @@ function ViabilityContent({
             seoError={seoError}
             deepBrandSearch={deepBrandSearch}
           />
+          <p className="mt-2 text-sm text-slate-500">
+            {compositeScore != null
+              ? "Tap a card below to see domain, brand, or MCA details."
+              : "Scores will land here — then tap a card for details."}
+          </p>
         </div>
       </header>
 
       {domain ? (
-        <DomainResults name={name} domain={domain} />
-      ) : domainPending ? (
-        <ModuleCardSkeleton title="Domain availability" />
+        <DomainResults key={`${name}-domain`} name={name} domain={domain} />
+      ) : checking ? (
+        <ModuleCardSkeleton
+          title="Domain availability"
+          subtitle={domainPending ? "Checking domains…" : "Waiting…"}
+        />
       ) : null}
 
-      <BrandSection
-        seo={seo}
-        seoError={seoError}
-        seoPending={seoPending}
-        deepBrandSearch={deepBrandSearch}
-      />
+      {seo || seoError ? (
+        <BrandSection
+          key={`${name}-brand-section`}
+          seo={seo}
+          seoError={seoError}
+          seoPending={seoPending}
+          deepBrandSearch={deepBrandSearch}
+        />
+      ) : checking ? (
+        <ModuleCardSkeleton
+          title="Brand uniqueness"
+          subtitle={
+            seoPending
+              ? `Checking in ${brandSearchModeLabel(deepBrandSearch).toLowerCase()}…`
+              : domainPending
+                ? "Waiting for domain check…"
+                : "Waiting…"
+          }
+        />
+      ) : null}
 
       {registration && !registration.disabled ? (
-        <RegistrationResults registration={registration} />
-      ) : registrationPending ? (
-        <ModuleCardSkeleton title="MCA registration" subtitle="Checking company name forms…" />
+        <RegistrationResults
+          key={`${name}-mca`}
+          registration={registration}
+        />
+      ) : checking ? (
+        <ModuleCardSkeleton
+          title="MCA registration"
+          subtitle={
+            registrationPending
+              ? "Checking company name forms…"
+              : "Waiting…"
+          }
+        />
       ) : null}
     </div>
   );

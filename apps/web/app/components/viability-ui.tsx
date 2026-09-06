@@ -46,12 +46,48 @@ export function ScoreRing({
   );
 }
 
+export function ScoreRingSpinner({ size = "lg" }: { size?: "lg" | "sm" | "xs" }) {
+  const dim =
+    size === "lg" ? "h-32 w-32" : size === "sm" ? "h-14 w-14" : "h-10 w-10";
+
+  return (
+    <div
+      className={`relative shrink-0 ${dim}`}
+      role="status"
+      aria-label="Calculating viability score"
+    >
+      <svg className={dim} viewBox="0 0 100 100" aria-hidden>
+        <circle cx="50" cy="50" r="45" fill="none" stroke="#e2e8f0" strokeWidth="8" />
+      </svg>
+      <svg
+        className={`absolute inset-0 ${dim} animate-spin`}
+        viewBox="0 0 100 100"
+        aria-hidden
+      >
+        <circle
+          cx="50"
+          cy="50"
+          r="45"
+          fill="none"
+          stroke="#6366f1"
+          strokeWidth="8"
+          strokeLinecap="round"
+          strokeDasharray="90 193"
+        />
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-indigo-400" />
+      </div>
+    </div>
+  );
+}
+
 export function ExpandableCard({
   title,
   score,
   weight,
   children,
-  defaultOpen = true,
+  defaultOpen = false,
 }: {
   title: string;
   score: number;
@@ -66,15 +102,23 @@ export function ExpandableCard({
       <button
         type="button"
         onClick={() => setOpen(!open)}
+        aria-expanded={open}
         className="flex w-full items-center justify-between text-left"
       >
         <div>
           <h3 className="font-semibold text-slate-900">{title}</h3>
-          <p className="text-xs text-slate-500">Weight {weight}</p>
+          <p className="text-xs text-slate-500">
+            Weight {weight}
+            {!open ? (
+              <span className="ml-1.5 font-medium text-indigo-600">· Tap for details</span>
+            ) : null}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <ScoreRing score={score} size="xs" />
-          <span className="text-slate-400 text-sm">{open ? "▾" : "▸"}</span>
+          <span className="text-sm text-slate-400" aria-hidden>
+            {open ? "▾" : "▸"}
+          </span>
         </div>
       </button>
       {open && (
