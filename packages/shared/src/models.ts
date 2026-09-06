@@ -11,6 +11,18 @@ import { z } from "zod";
  */
 export const OPENROUTER_MODELS = [
   {
+    id: "minimax/minimax-m3:free",
+    label: "MiniMax M3",
+  },
+  {
+    id: "nvidia/nemotron-3-super-120b-a12b:free",
+    label: "Nemotron 3 Super 120B",
+  },
+  {
+    id: "z-ai/glm-5.2:free",
+    label: "GLM 5.2",
+  },
+  {
     id: "google/gemma-4-31b-it:free",
     label: "Gemma 4 31B",
   },
@@ -18,31 +30,19 @@ export const OPENROUTER_MODELS = [
     id: "google/gemma-4-26b-a4b-it:free",
     label: "Gemma 4 26B",
   },
-  {
-    id: "z-ai/glm-5.2:free",
-    label: "GLM 5.2",
-  },
-  {
-    id: "nvidia/nemotron-3-super-120b-a12b:free",
-    label: "Nemotron 3 Super 120B",
-  },
-  {
-    id: "minimax/minimax-m3:free",
-    label: "MiniMax M3",
-  },
 ] as const;
 
 export type OpenRouterModelId = (typeof OPENROUTER_MODELS)[number]["id"];
 
 export const DEFAULT_OPENROUTER_MODEL_ID: OpenRouterModelId =
-  "google/gemma-4-31b-it:free";
+  "minimax/minimax-m3:free";
 
 export const OpenRouterModelIdSchema = z.enum([
+  "minimax/minimax-m3:free",
+  "nvidia/nemotron-3-super-120b-a12b:free",
+  "z-ai/glm-5.2:free",
   "google/gemma-4-31b-it:free",
   "google/gemma-4-26b-a4b-it:free",
-  "z-ai/glm-5.2:free",
-  "nvidia/nemotron-3-super-120b-a12b:free",
-  "minimax/minimax-m3:free",
 ]);
 
 export function resolveOpenRouterModelId(model?: string): OpenRouterModelId {

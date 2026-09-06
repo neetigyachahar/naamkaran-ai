@@ -6,10 +6,9 @@ const LITE_TIMEOUT_MS = 60_000;
 const DEEP_TIMEOUT_MS = 90_000;
 const LITE_MAX_OUTPUT_TOKENS = 384;
 const DEEP_MAX_OUTPUT_TOKENS = 512;
-const LITE_SEARCH_RESULTS = 3;
-const DEEP_SEARCH_RESULTS = 5;
-const BORDERLINE_LOW = 35;
-const BORDERLINE_HIGH = 65;
+/** Fewer results = cheaper search; still one API call either way. */
+const LITE_SEARCH_RESULTS = 2;
+const DEEP_SEARCH_RESULTS = 3;
 
 interface SeoPayload {
   isExistingBrand: boolean;
@@ -41,17 +40,10 @@ function buildDeepPrimaryPrompt(name: string, category?: string): string {
 1. Exact match — is this already a known brand, product, or company name?
 2. "${name}" startup OR app OR software OR SaaS — any active businesses using this name?
 ${categorySearch}
+4. Official website, app store, Crunchbase, LinkedIn company page, or news coverage as an established business.
 
 Synthesize all angles. If any search finds a clear existing brand or product, set isExistingBrand to true and reflect that in confidence.
-
-Respond ONLY with JSON (no markdown): {"isExistingBrand": boolean, "confidence": 0-100, "summary": "1-2 sentence explanation", "competitors": ["name1", "name2"]}`;
-}
-
-function buildDeepFollowUpPrompt(name: string, category?: string): string {
-  const context = category ? ` in the ${category} space` : "";
-  return `Search whether "${name}"${context} has an official website, app store listing, Crunchbase profile, LinkedIn company page, or news coverage as an established business.
-
-Focus on distinguishing real brands from generic/unrelated word matches.
+Distinguish real brands from generic/unrelated word matches.
 
 Respond ONLY with JSON (no markdown): {"isExistingBrand": boolean, "confidence": 0-100, "summary": "1-2 sentence explanation", "competitors": ["name1", "name2"]}`;
 }
@@ -180,48 +172,6 @@ function toSeoSources(citations: WebCitation[]): SeoSource[] {
   return citations.map((citation) => ({ title: citation.title, uri: citation.uri }));
 }
 
-async function writeBrandSummary(
-  apiKey: string,
-  name: string,
-  payload: SeoPayload,
-  sources: SeoSource[],
-  modelId: OpenRouterModelId,
-): Promise<string> {
-  const sourceHint = sources
-    .slice(0, 5)
-    .map((s) => s.title)
-    .join(", ");
-
-  try {
-    const { text } = await chatCompletion({
-      apiKey,
-      model: modelId,
-      operation: "brand_search",
-      maxTokens: 128,
-      timeoutMs: 20_000,
-      messages: [
-        {
-          role: "user",
-          content: `Write one clear sentence about brand uniqueness for the name "${name}".
-Existing brand: ${payload.isExistingBrand}
-Confidence: ${payload.confidence}%
-${sourceHint ? `Sources: ${sourceHint}` : ""}
-
-Reply with only the summary sentence.`,
-        },
-      ],
-    });
-
-    if (text && !isWeakSummary(text)) {
-      return text;
-    }
-  } catch {
-    // fall through to deterministic summary
-  }
-
-  return fallbackSummary(name, payload.isExistingBrand, payload.confidence);
-}
-
 async function executeSearch(
   apiKey: string,
   prompt: string,
@@ -234,6 +184,7 @@ async function executeSearch(
     operation: "brand_search",
     maxTokens: mode === "deep" ? DEEP_MAX_OUTPUT_TOKENS : LITE_MAX_OUTPUT_TOKENS,
     timeoutMs: mode === "deep" ? DEEP_TIMEOUT_MS : LITE_TIMEOUT_MS,
+    jsonMode: true,
     webSearchMaxResults: mode === "deep" ? DEEP_SEARCH_RESULTS : LITE_SEARCH_RESULTS,
     messages: [{ role: "user", content: prompt }],
   });
@@ -254,6 +205,9 @@ async function runSearch(
 ): Promise<SearchResponse> {
   const raw = await executeSearch(apiKey, prompt, modelId, mode);
   if (!raw) {
+    console.warn(
+      `[seo-check] empty model response name=${name} mode=${mode} model=${modelId}`,
+    );
     return {
       payload: {
         isExistingBrand: false,
@@ -267,60 +221,19 @@ async function runSearch(
 
   let { payload, quality } = parseSeoJson(raw.text, name);
   const sources = raw.sources;
+  console.info(
+    `[seo-check] parsed name=${name} quality=${quality} isExistingBrand=${payload.isExistingBrand} confidence=${payload.confidence} sources=${sources.length} textChars=${raw.text.length}`,
+  );
 
-  if (quality !== "full" || isWeakSummary(payload.summary)) {
+  // Never spend a second LLM call rewriting the summary — use a deterministic fallback.
+  if (isWeakSummary(payload.summary)) {
     payload = {
       ...payload,
-      summary: await writeBrandSummary(apiKey, name, payload, sources, modelId),
+      summary: fallbackSummary(name, payload.isExistingBrand, payload.confidence),
     };
   }
 
   return { payload, sources };
-}
-
-function mergeSources(...sourceLists: SeoSource[][]): SeoSource[] {
-  const seen = new Set<string>();
-  const merged: SeoSource[] = [];
-
-  for (const sources of sourceLists) {
-    for (const source of sources) {
-      if (seen.has(source.uri)) continue;
-      seen.add(source.uri);
-      merged.push(source);
-    }
-  }
-
-  return merged;
-}
-
-function mergePayloads(primary: SeoPayload, secondary: SeoPayload): SeoPayload {
-  const isExistingBrand = primary.isExistingBrand || secondary.isExistingBrand;
-
-  let confidence: number;
-  if (isExistingBrand) {
-    const brandConfidences = [primary, secondary]
-      .filter((p) => p.isExistingBrand)
-      .map((p) => p.confidence);
-    confidence = Math.max(...brandConfidences, 0);
-  } else {
-    confidence = Math.round((primary.confidence + secondary.confidence) / 2);
-  }
-
-  const competitors = [...(primary.competitors ?? []), ...(secondary.competitors ?? [])].filter(
-    (value, index, array) => array.indexOf(value) === index,
-  );
-
-  const summary =
-    primary.summary === secondary.summary
-      ? primary.summary
-      : `${primary.summary} ${secondary.summary}`.trim();
-
-  return {
-    isExistingBrand,
-    confidence,
-    summary,
-    competitors: competitors.length > 0 ? competitors : undefined,
-  };
 }
 
 function computeSeoScore(isExistingBrand: boolean, confidence: number): number {
@@ -328,13 +241,6 @@ function computeSeoScore(isExistingBrand: boolean, confidence: number): number {
     return Math.max(0, Math.round(100 - confidence));
   }
   return Math.max(confidence, 85);
-}
-
-function isBorderline(confidence: number, isExistingBrand: boolean): boolean {
-  if (isExistingBrand) {
-    return confidence < BORDERLINE_HIGH;
-  }
-  return confidence > BORDERLINE_LOW && confidence < BORDERLINE_HIGH;
 }
 
 function isSearchTimeout(error: unknown): boolean {
@@ -396,35 +302,20 @@ async function seoCheckLite(
   return toSeoResult(payload, sources);
 }
 
+/** One web-grounded call only — no borderline follow-up (saves RPM/RPD). */
 async function seoCheckDeep(
   name: string,
   apiKey: string,
   category: string | undefined,
   model: OpenRouterModelId,
 ): Promise<SeoResult> {
-  const primary = await runSearch(
+  const { payload, sources } = await runSearch(
     apiKey,
     buildDeepPrimaryPrompt(name, category),
     name,
     model,
     "deep",
   );
-
-  let payload = primary.payload;
-  let sources = primary.sources;
-
-  if (isBorderline(primary.payload.confidence, primary.payload.isExistingBrand)) {
-    const followUp = await runSearch(
-      apiKey,
-      buildDeepFollowUpPrompt(name, category),
-      name,
-      model,
-      "deep",
-    );
-    payload = mergePayloads(primary.payload, followUp.payload);
-    sources = mergeSources(primary.sources, followUp.sources);
-  }
-
   return toSeoResult(payload, sources);
 }
 
@@ -436,16 +327,27 @@ export async function seoCheck(
   mode: BrandSearchMode = "lite",
 ): Promise<SeoResult> {
   const model = resolveOpenRouterModelId(modelId);
+  console.info(`[seo-check] start name=${name} mode=${mode} model=${model}`);
 
   try {
-    if (mode === "deep") {
-      return await seoCheckDeep(name, apiKey, category, model);
-    }
-    return await seoCheckLite(name, apiKey, category, model);
+    const result =
+      mode === "deep"
+        ? await seoCheckDeep(name, apiKey, category, model)
+        : await seoCheckLite(name, apiKey, category, model);
+    console.info(
+      `[seo-check] done name=${name} score=${result.score} isExistingBrand=${result.isExistingBrand} confidence=${result.confidence} sources=${result.sources.length}`,
+    );
+    return result;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     if (isSearchTimeout(error)) {
+      console.warn(`[seo-check] timeout name=${name} mode=${mode} error=${message}`);
       return timedOutSeoResult(mode);
     }
+    // Soft-fail so Smart pick / analyze can continue; score 50 + confidence 0 is this path.
+    console.error(
+      `[seo-check] unavailable fallback name=${name} mode=${mode} error=${message}`,
+    );
     return unavailableSeoResult(name);
   }
 }

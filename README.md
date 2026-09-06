@@ -39,7 +39,7 @@ firebase functions:secrets:set DATA_GOV_IN_API_KEY
 ```
 
 Users can also bring their own OpenRouter key (BYOK) from the app header. The
-model defaults to free `:free` models (e.g. `google/gemma-4-31b-it:free`); note
+model defaults to free `:free` models (e.g. `minimax/minimax-m3:free`); note
 that OpenRouter's web-search step for brand checks bills a small per-query cost
 to whichever key is used, even when the model itself is free.
 

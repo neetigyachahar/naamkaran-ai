@@ -116,6 +116,10 @@ export async function chatCompletion(
     body.plugins = [{ id: "web", max_results: params.webSearchMaxResults }];
   }
 
+  console.info(
+    `[openrouter] chatCompletion op=${params.operation} model=${params.model} jsonMode=${Boolean(params.jsonMode)} webSearch=${params.webSearchMaxResults ?? "off"} maxTokens=${params.maxTokens ?? "default"} messages=${params.messages.length}`,
+  );
+
   const response = await openRouterFetch(
     OPENROUTER_CHAT_URL,
     {
@@ -129,6 +133,9 @@ export async function chatCompletion(
 
   if (!response.ok) {
     const errorBody = await response.text();
+    console.error(
+      `[openrouter] chatCompletion HTTP error op=${params.operation} status=${response.status} body=${errorBody.slice(0, 400)}`,
+    );
     throw openRouterApiError(
       `OpenRouter API error ${response.status}: ${errorBody}`,
       params.operation,
@@ -138,6 +145,9 @@ export async function chatCompletion(
 
   const data = (await response.json()) as OpenRouterChatResponse;
   if (data.error) {
+    console.error(
+      `[openrouter] chatCompletion API error op=${params.operation} message=${data.error.message ?? "unknown"}`,
+    );
     throw openRouterApiError(
       `OpenRouter API error: ${data.error.message ?? "unknown"}`,
       params.operation,
@@ -145,10 +155,12 @@ export async function chatCompletion(
   }
 
   const message = data.choices?.[0]?.message;
-  return {
-    text: message?.content?.trim() ?? "",
-    citations: extractCitations(message),
-  };
+  const text = message?.content?.trim() ?? "";
+  const citations = extractCitations(message);
+  console.info(
+    `[openrouter] chatCompletion ok op=${params.operation} model=${params.model} textChars=${text.length} citations=${citations.length}`,
+  );
+  return { text, citations };
 }
 
 export function analysisCacheKey(

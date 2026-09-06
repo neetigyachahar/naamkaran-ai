@@ -4083,13 +4083,13 @@ var coerce = {
 var NEVER = INVALID;
 
 // ../../packages/shared/src/models.ts
-var DEFAULT_OPENROUTER_MODEL_ID = "google/gemma-4-31b-it:free";
+var DEFAULT_OPENROUTER_MODEL_ID = "minimax/minimax-m3:free";
 var OpenRouterModelIdSchema = external_exports.enum([
-  "google/gemma-4-31b-it:free",
-  "google/gemma-4-26b-a4b-it:free",
-  "z-ai/glm-5.2:free",
+  "minimax/minimax-m3:free",
   "nvidia/nemotron-3-super-120b-a12b:free",
-  "minimax/minimax-m3:free"
+  "z-ai/glm-5.2:free",
+  "google/gemma-4-31b-it:free",
+  "google/gemma-4-26b-a4b-it:free"
 ]);
 function resolveOpenRouterModelId(model) {
   const parsed = OpenRouterModelIdSchema.safeParse(model);
@@ -4134,8 +4134,8 @@ var GenerateNamesResponseSchema = external_exports.object({
 var SMART_PICK_MIN_SCORE = 60;
 var SMART_PICK_MIN_ACCEPTED = 3;
 var SMART_PICK_REVEAL_COUNT = 3;
-var SMART_PICK_BATCH_SIZE = 6;
-var SMART_PICK_MAX_CANDIDATES = 15;
+var SMART_PICK_BATCH_SIZE = 4;
+var SMART_PICK_MAX_CANDIDATES = 8;
 var SMART_PICK_MIN_DOMAIN_SCORE = 2 * SMART_PICK_MIN_SCORE - 100;
 var SmartPickRequestSchema = external_exports.object({
   genreId: NameGenreIdSchema,
@@ -4284,7 +4284,8 @@ function wrapOpenRouterFailure(error, operation) {
 }
 
 // src/lib/openrouter-throttle.ts
-var MIN_GAP_MS = 3500;
+var MIN_GAP_MS = 3200;
+var MAX_ATTEMPTS = 3;
 var lastCallAt = 0;
 var chain = Promise.resolve();
 function sleep(ms) {
@@ -4327,17 +4328,28 @@ async function waitForOpenRouterSlot() {
   await chain;
 }
 async function openRouterFetch(url, init, options) {
-  const { operation, maxAttempts = 5 } = options;
+  const { operation, maxAttempts = MAX_ATTEMPTS } = options;
   try {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await waitForOpenRouterSlot();
+      console.info(
+        `[openrouter] fetch start op=${operation} attempt=${attempt + 1}/${maxAttempts}`
+      );
+      const startedAt = Date.now();
       const response = await fetch(url, init);
+      const elapsedMs = Date.now() - startedAt;
       if (response.status !== 429) {
+        console.info(
+          `[openrouter] fetch done op=${operation} status=${response.status} elapsedMs=${elapsedMs} attempt=${attempt + 1}`
+        );
         return response;
       }
       const retryFromHeader = parseRetryAfterHeader(response.headers.get("retry-after"));
       const body = await response.text();
       const retryMs = retryFromHeader ?? parseRetryDelayBody(body) ?? MIN_GAP_MS * (attempt + 1);
+      console.warn(
+        `[openrouter] 429 rate limit op=${operation} attempt=${attempt + 1}/${maxAttempts} retryInMs=${retryMs} body=${body.slice(0, 240)}`
+      );
       await sleep(retryMs);
     }
     throw openRouterApiError("OpenRouter API rate limit exceeded after retries", operation, {
@@ -4345,6 +4357,9 @@ async function openRouterFetch(url, init, options) {
       httpStatus: 429
     });
   } catch (error) {
+    console.error(
+      `[openrouter] fetch failed op=${operation} error=${error instanceof Error ? error.message : String(error)}`
+    );
     throw wrapOpenRouterFailure(error, operation);
   }
 }
@@ -4391,6 +4406,9 @@ async function chatCompletion(params) {
   if (params.webSearchMaxResults != null) {
     body.plugins = [{ id: "web", max_results: params.webSearchMaxResults }];
   }
+  console.info(
+    `[openrouter] chatCompletion op=${params.operation} model=${params.model} jsonMode=${Boolean(params.jsonMode)} webSearch=${params.webSearchMaxResults ?? "off"} maxTokens=${params.maxTokens ?? "default"} messages=${params.messages.length}`
+  );
   const response = await openRouterFetch(
     OPENROUTER_CHAT_URL,
     {
@@ -4403,6 +4421,9 @@ async function chatCompletion(params) {
   );
   if (!response.ok) {
     const errorBody = await response.text();
+    console.error(
+      `[openrouter] chatCompletion HTTP error op=${params.operation} status=${response.status} body=${errorBody.slice(0, 400)}`
+    );
     throw openRouterApiError(
       `OpenRouter API error ${response.status}: ${errorBody}`,
       params.operation,
@@ -4411,16 +4432,21 @@ async function chatCompletion(params) {
   }
   const data = await response.json();
   if (data.error) {
+    console.error(
+      `[openrouter] chatCompletion API error op=${params.operation} message=${data.error.message ?? "unknown"}`
+    );
     throw openRouterApiError(
       `OpenRouter API error: ${data.error.message ?? "unknown"}`,
       params.operation
     );
   }
   const message = data.choices?.[0]?.message;
-  return {
-    text: message?.content?.trim() ?? "",
-    citations: extractCitations(message)
-  };
+  const text = message?.content?.trim() ?? "";
+  const citations = extractCitations(message);
+  console.info(
+    `[openrouter] chatCompletion ok op=${params.operation} model=${params.model} textChars=${text.length} citations=${citations.length}`
+  );
+  return { text, citations };
 }
 function analysisCacheKey(name, modelId, brandSearchMode = "lite") {
   return `${name.toLowerCase().trim()}:${modelId}:${brandSearchMode}`;
@@ -4802,10 +4828,8 @@ var LITE_TIMEOUT_MS = 6e4;
 var DEEP_TIMEOUT_MS = 9e4;
 var LITE_MAX_OUTPUT_TOKENS = 384;
 var DEEP_MAX_OUTPUT_TOKENS = 512;
-var LITE_SEARCH_RESULTS = 3;
-var DEEP_SEARCH_RESULTS = 5;
-var BORDERLINE_LOW = 35;
-var BORDERLINE_HIGH = 65;
+var LITE_SEARCH_RESULTS = 2;
+var DEEP_SEARCH_RESULTS = 3;
 function buildLitePrompt(name, category) {
   const context = category ? ` in ${category}` : "";
   return `Search the web: is "${name}"${context} already a known brand, product, company, or app?
@@ -4820,16 +4844,10 @@ function buildDeepPrimaryPrompt(name, category) {
 1. Exact match \u2014 is this already a known brand, product, or company name?
 2. "${name}" startup OR app OR software OR SaaS \u2014 any active businesses using this name?
 ${categorySearch}
+4. Official website, app store, Crunchbase, LinkedIn company page, or news coverage as an established business.
 
 Synthesize all angles. If any search finds a clear existing brand or product, set isExistingBrand to true and reflect that in confidence.
-
-Respond ONLY with JSON (no markdown): {"isExistingBrand": boolean, "confidence": 0-100, "summary": "1-2 sentence explanation", "competitors": ["name1", "name2"]}`;
-}
-function buildDeepFollowUpPrompt(name, category) {
-  const context = category ? ` in the ${category} space` : "";
-  return `Search whether "${name}"${context} has an official website, app store listing, Crunchbase profile, LinkedIn company page, or news coverage as an established business.
-
-Focus on distinguishing real brands from generic/unrelated word matches.
+Distinguish real brands from generic/unrelated word matches.
 
 Respond ONLY with JSON (no markdown): {"isExistingBrand": boolean, "confidence": 0-100, "summary": "1-2 sentence explanation", "competitors": ["name1", "name2"]}`;
 }
@@ -4930,34 +4948,6 @@ function parseSeoJson(text, name) {
 function toSeoSources(citations) {
   return citations.map((citation) => ({ title: citation.title, uri: citation.uri }));
 }
-async function writeBrandSummary(apiKey, name, payload, sources, modelId) {
-  const sourceHint = sources.slice(0, 5).map((s) => s.title).join(", ");
-  try {
-    const { text } = await chatCompletion({
-      apiKey,
-      model: modelId,
-      operation: "brand_search",
-      maxTokens: 128,
-      timeoutMs: 2e4,
-      messages: [
-        {
-          role: "user",
-          content: `Write one clear sentence about brand uniqueness for the name "${name}".
-Existing brand: ${payload.isExistingBrand}
-Confidence: ${payload.confidence}%
-${sourceHint ? `Sources: ${sourceHint}` : ""}
-
-Reply with only the summary sentence.`
-        }
-      ]
-    });
-    if (text && !isWeakSummary(text)) {
-      return text;
-    }
-  } catch {
-  }
-  return fallbackSummary(name, payload.isExistingBrand, payload.confidence);
-}
 async function executeSearch(apiKey, prompt, modelId, mode) {
   const { text, citations } = await chatCompletion({
     apiKey,
@@ -4965,6 +4955,7 @@ async function executeSearch(apiKey, prompt, modelId, mode) {
     operation: "brand_search",
     maxTokens: mode === "deep" ? DEEP_MAX_OUTPUT_TOKENS : LITE_MAX_OUTPUT_TOKENS,
     timeoutMs: mode === "deep" ? DEEP_TIMEOUT_MS : LITE_TIMEOUT_MS,
+    jsonMode: true,
     webSearchMaxResults: mode === "deep" ? DEEP_SEARCH_RESULTS : LITE_SEARCH_RESULTS,
     messages: [{ role: "user", content: prompt }]
   });
@@ -4976,6 +4967,9 @@ async function executeSearch(apiKey, prompt, modelId, mode) {
 async function runSearch(apiKey, prompt, name, modelId, mode) {
   const raw = await executeSearch(apiKey, prompt, modelId, mode);
   if (!raw) {
+    console.warn(
+      `[seo-check] empty model response name=${name} mode=${mode} model=${modelId}`
+    );
     return {
       payload: {
         isExistingBrand: false,
@@ -4988,57 +4982,22 @@ async function runSearch(apiKey, prompt, name, modelId, mode) {
   }
   let { payload, quality } = parseSeoJson(raw.text, name);
   const sources = raw.sources;
-  if (quality !== "full" || isWeakSummary(payload.summary)) {
+  console.info(
+    `[seo-check] parsed name=${name} quality=${quality} isExistingBrand=${payload.isExistingBrand} confidence=${payload.confidence} sources=${sources.length} textChars=${raw.text.length}`
+  );
+  if (isWeakSummary(payload.summary)) {
     payload = {
       ...payload,
-      summary: await writeBrandSummary(apiKey, name, payload, sources, modelId)
+      summary: fallbackSummary(name, payload.isExistingBrand, payload.confidence)
     };
   }
   return { payload, sources };
-}
-function mergeSources(...sourceLists) {
-  const seen = /* @__PURE__ */ new Set();
-  const merged = [];
-  for (const sources of sourceLists) {
-    for (const source of sources) {
-      if (seen.has(source.uri)) continue;
-      seen.add(source.uri);
-      merged.push(source);
-    }
-  }
-  return merged;
-}
-function mergePayloads(primary, secondary) {
-  const isExistingBrand = primary.isExistingBrand || secondary.isExistingBrand;
-  let confidence;
-  if (isExistingBrand) {
-    const brandConfidences = [primary, secondary].filter((p) => p.isExistingBrand).map((p) => p.confidence);
-    confidence = Math.max(...brandConfidences, 0);
-  } else {
-    confidence = Math.round((primary.confidence + secondary.confidence) / 2);
-  }
-  const competitors = [...primary.competitors ?? [], ...secondary.competitors ?? []].filter(
-    (value, index, array) => array.indexOf(value) === index
-  );
-  const summary = primary.summary === secondary.summary ? primary.summary : `${primary.summary} ${secondary.summary}`.trim();
-  return {
-    isExistingBrand,
-    confidence,
-    summary,
-    competitors: competitors.length > 0 ? competitors : void 0
-  };
 }
 function computeSeoScore(isExistingBrand, confidence) {
   if (isExistingBrand) {
     return Math.max(0, Math.round(100 - confidence));
   }
   return Math.max(confidence, 85);
-}
-function isBorderline(confidence, isExistingBrand) {
-  if (isExistingBrand) {
-    return confidence < BORDERLINE_HIGH;
-  }
-  return confidence > BORDERLINE_LOW && confidence < BORDERLINE_HIGH;
 }
 function isSearchTimeout(error) {
   if (!(error instanceof Error)) return false;
@@ -5083,39 +5042,33 @@ async function seoCheckLite(name, apiKey, category, model) {
   return toSeoResult(payload, sources);
 }
 async function seoCheckDeep(name, apiKey, category, model) {
-  const primary = await runSearch(
+  const { payload, sources } = await runSearch(
     apiKey,
     buildDeepPrimaryPrompt(name, category),
     name,
     model,
     "deep"
   );
-  let payload = primary.payload;
-  let sources = primary.sources;
-  if (isBorderline(primary.payload.confidence, primary.payload.isExistingBrand)) {
-    const followUp = await runSearch(
-      apiKey,
-      buildDeepFollowUpPrompt(name, category),
-      name,
-      model,
-      "deep"
-    );
-    payload = mergePayloads(primary.payload, followUp.payload);
-    sources = mergeSources(primary.sources, followUp.sources);
-  }
   return toSeoResult(payload, sources);
 }
 async function seoCheck(name, apiKey, category, modelId, mode = "lite") {
   const model = resolveOpenRouterModelId(modelId);
+  console.info(`[seo-check] start name=${name} mode=${mode} model=${model}`);
   try {
-    if (mode === "deep") {
-      return await seoCheckDeep(name, apiKey, category, model);
-    }
-    return await seoCheckLite(name, apiKey, category, model);
+    const result = mode === "deep" ? await seoCheckDeep(name, apiKey, category, model) : await seoCheckLite(name, apiKey, category, model);
+    console.info(
+      `[seo-check] done name=${name} score=${result.score} isExistingBrand=${result.isExistingBrand} confidence=${result.confidence} sources=${result.sources.length}`
+    );
+    return result;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     if (isSearchTimeout(error)) {
+      console.warn(`[seo-check] timeout name=${name} mode=${mode} error=${message}`);
       return timedOutSeoResult(mode);
     }
+    console.error(
+      `[seo-check] unavailable fallback name=${name} mode=${mode} error=${message}`
+    );
     return unavailableSeoResult(name);
   }
 }

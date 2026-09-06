@@ -1,10 +1,10 @@
 import type { AiApiOperation } from "@naamkaran/shared";
 import { openRouterApiError, wrapOpenRouterFailure } from "./openrouter-api-error";
 
-// OpenRouter free-tier models are typically limited to ~20 requests/minute.
-// Checks run sequentially, so a small inter-call gap keeps us under that
-// ceiling; 429 retries below absorb short bursts and daily-cap hiccups.
-const MIN_GAP_MS = 3_500;
+// OpenRouter free :free models are capped at 20 RPM. Space calls at ≥3.2s
+// (~18.7 RPM) so retries / overlapping flows stay under the ceiling.
+const MIN_GAP_MS = 3_200;
+const MAX_ATTEMPTS = 3;
 let lastCallAt = 0;
 let chain: Promise<void> = Promise.resolve();
 
@@ -67,15 +67,23 @@ export async function openRouterFetch(
   init: RequestInit,
   options: OpenRouterFetchOptions,
 ): Promise<Response> {
-  const { operation, maxAttempts = 5 } = options;
+  const { operation, maxAttempts = MAX_ATTEMPTS } = options;
 
   try {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await waitForOpenRouterSlot();
 
+      console.info(
+        `[openrouter] fetch start op=${operation} attempt=${attempt + 1}/${maxAttempts}`,
+      );
+      const startedAt = Date.now();
       const response = await fetch(url, init);
+      const elapsedMs = Date.now() - startedAt;
 
       if (response.status !== 429) {
+        console.info(
+          `[openrouter] fetch done op=${operation} status=${response.status} elapsedMs=${elapsedMs} attempt=${attempt + 1}`,
+        );
         return response;
       }
 
@@ -83,6 +91,9 @@ export async function openRouterFetch(
       const body = await response.text();
       const retryMs =
         retryFromHeader ?? parseRetryDelayBody(body) ?? MIN_GAP_MS * (attempt + 1);
+      console.warn(
+        `[openrouter] 429 rate limit op=${operation} attempt=${attempt + 1}/${maxAttempts} retryInMs=${retryMs} body=${body.slice(0, 240)}`,
+      );
       await sleep(retryMs);
     }
 
@@ -91,6 +102,9 @@ export async function openRouterFetch(
       httpStatus: 429,
     });
   } catch (error) {
+    console.error(
+      `[openrouter] fetch failed op=${operation} error=${error instanceof Error ? error.message : String(error)}`,
+    );
     throw wrapOpenRouterFailure(error, operation);
   }
 }
